@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+*.env
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_metadata
+
+# VS Code
+.vscode/
+
+# macOS
+.DS_Store
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+npm-debug.log*
+
+# GCP credentials
+*.json
+service_account*.json
+gcp_key*.json
+
+# Data files (large)
+*.csv
+*.parquet
+*.pkl
+*.joblib
+outputs/
+
+# Models
+models/trained_models/
