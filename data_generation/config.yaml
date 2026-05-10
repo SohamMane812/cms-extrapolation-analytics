@@ -1,0 +1,473 @@
+# =============================================================================
+# CMS Extrapolation Analytics — Master Data Generation Config
+# =============================================================================
+# This file controls all data generation behavior.
+# Both prototype and full modes use identical logic, distributions, and
+# injection rules. Only scale parameters differ.
+#
+# To switch modes: set active_mode to "prototype" or "full"
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# ACTIVE MODE
+# -----------------------------------------------------------------------------
+active_mode: "prototype"   # Options: "prototype" | "full"
+
+# -----------------------------------------------------------------------------
+# GLOBAL SETTINGS (apply to both modes)
+# -----------------------------------------------------------------------------
+global:
+  random_seed: 42
+  output_format: "parquet"          # Options: "parquet" | "csv"
+  output_dir: "outputs/generated"   # Local output directory before GCS upload
+  date_range:
+    start: "2021-01-01"
+    end: "2023-12-31"               # 3 years of claims data
+  reference_date: "2024-01-01"      # Fixed reference date for age computation
+
+# -----------------------------------------------------------------------------
+# SCALE PARAMETERS
+# -----------------------------------------------------------------------------
+scale:
+  prototype:
+    num_beneficiaries: 1_000
+    num_providers: 50
+    num_part_a_claims: 3_000        # ~3 claims per beneficiary
+    num_part_b_claim_lines: 6_000   # ~2x Part A volume
+    num_diagnoses_per_claim_min: 3
+    num_diagnoses_per_claim_max: 8
+    num_lines_per_claim_min: 1
+    num_lines_per_claim_max: 4
+
+  full:
+    num_beneficiaries: 75_000
+    num_providers: 1_000
+    num_part_a_claims: 400_000
+    num_part_b_claim_lines: 1_000_000
+    num_diagnoses_per_claim_min: 3
+    num_diagnoses_per_claim_max: 12
+    num_lines_per_claim_min: 1
+    num_lines_per_claim_max: 6
+
+# -----------------------------------------------------------------------------
+# REFERENCE TABLE PARAMETERS
+# (Fixed regardless of mode — reference tables do not scale)
+# -----------------------------------------------------------------------------
+reference_tables:
+  num_procedure_codes: 150          # Realistic CPT/HCPCS code set
+  num_diagnosis_codes: 300          # Realistic ICD-10 code set
+
+  procedure_categories:
+    - name: "E/M"
+      weight: 0.30                  # 30% of procedure codes are E/M visits
+      payment_range: [50, 350]
+      std_dev_range: [15, 60]
+    - name: "Imaging"
+      weight: 0.15
+      payment_range: [100, 1200]
+      std_dev_range: [30, 200]
+    - name: "Lab"
+      weight: 0.20
+      payment_range: [10, 300]
+      std_dev_range: [5, 50]
+    - name: "Surgery"
+      weight: 0.10
+      payment_range: [500, 8000]
+      std_dev_range: [100, 1500]
+    - name: "Telehealth"
+      weight: 0.10
+      payment_range: [40, 250]
+      std_dev_range: [10, 40]
+    - name: "Injection"
+      weight: 0.08
+      payment_range: [50, 2000]
+      std_dev_range: [20, 400]
+    - name: "Pathology"
+      weight: 0.07
+      payment_range: [20, 400]
+      std_dev_range: [10, 80]
+
+  high_risk_billing_rate: 0.15      # 15% of procedures flagged as high risk
+  inpatient_only_rate: 0.05         # 5% of procedures are inpatient only
+
+  hcc_mapped_diagnosis_rate: 0.40   # 40% of diagnosis codes are HCC-mapped
+  chronic_diagnosis_rate: 0.45      # 45% of diagnosis codes are chronic
+  high_value_hcc_rate: 0.15         # 15% of diagnosis codes are high-value HCC
+
+  body_systems:
+    - "Cardiovascular"
+    - "Endocrine"
+    - "Respiratory"
+    - "Musculoskeletal"
+    - "Neurological"
+    - "Renal"
+    - "Oncology"
+    - "Gastrointestinal"
+    - "Psychiatric"
+    - "Infectious"
+
+# -----------------------------------------------------------------------------
+# PROVIDER DIMENSION PARAMETERS
+# -----------------------------------------------------------------------------
+provider_dim:
+  provider_type_distribution:
+    Hospital: 0.10
+    Physician: 0.55
+    SNF: 0.10
+    HHA: 0.10
+    Hospice: 0.05
+    Outpatient_Facility: 0.10
+
+  peer_groups:
+    - name: "Cardiology_Physician_Group"
+      provider_type: "Physician"
+      specialty: "Cardiology"
+      weight: 0.10
+    - name: "PrimaryCare_Physician_Group"
+      provider_type: "Physician"
+      specialty: "Primary_Care"
+      weight: 0.20
+    - name: "Oncology_Physician_Group"
+      provider_type: "Physician"
+      specialty: "Oncology"
+      weight: 0.08
+    - name: "Orthopedics_Physician_Group"
+      provider_type: "Physician"
+      specialty: "Orthopedics"
+      weight: 0.07
+    - name: "Large_Inpatient_Hospital"
+      provider_type: "Hospital"
+      specialty: null
+      weight: 0.05
+    - name: "Small_Community_Hospital"
+      provider_type: "Hospital"
+      specialty: null
+      weight: 0.05
+    - name: "SNF_Facility"
+      provider_type: "SNF"
+      specialty: null
+      weight: 0.10
+    - name: "Home_Health_Agency"
+      provider_type: "HHA"
+      specialty: null
+      weight: 0.10
+    - name: "Outpatient_Facility_Group"
+      provider_type: "Outpatient_Facility"
+      specialty: null
+      weight: 0.10
+    - name: "Neurology_Physician_Group"
+      provider_type: "Physician"
+      specialty: "Neurology"
+      weight: 0.05
+
+  risk_profile_distribution:
+    Normal: 0.70
+    High_Volume: 0.15
+    Emerging: 0.08
+    Suspicious: 0.05
+    Outlier: 0.02
+
+  ownership_distribution:
+    Nonprofit: 0.45
+    For_Profit: 0.40
+    Government: 0.15
+
+  urban_rural_distribution:
+    Urban: 0.55
+    Suburban: 0.30
+    Rural: 0.15
+
+  years_active_range: [1, 35]
+
+  bed_size:
+    Large_Inpatient_Hospital: [150, 800]
+    Small_Community_Hospital: [10, 149]
+    SNF_Facility: [30, 200]
+
+# -----------------------------------------------------------------------------
+# BENEFICIARY (CCLF8) PARAMETERS
+# -----------------------------------------------------------------------------
+beneficiary:
+  age_distribution:
+    min: 65
+    max: 95
+    mean: 74
+    std: 7
+
+  sex_distribution:
+    male: 0.45
+    female: 0.55
+
+  race_distribution:
+    "1": 0.75    # White
+    "2": 0.10    # Black
+    "3": 0.05    # Other
+    "4": 0.04    # Asian
+    "5": 0.04    # Hispanic
+    "6": 0.01    # Native American
+    "0": 0.01    # Unknown
+
+  medicare_status_distribution:
+    AGED: 0.75
+    DISABLED: 0.15
+    ESRD: 0.05
+    AGED_ESRD: 0.05
+
+  dual_eligibility_rate: 0.20       # 20% of beneficiaries are dual eligible
+  dual_full_rate: 0.60              # 60% of dual eligible are fully dual
+  ma_plan_rate: 0.30                # 30% are Medicare Advantage-like
+  high_risk_rate: 0.15              # 15% flagged as high risk
+  death_rate: 0.05                  # 5% have a death date within the data period
+  low_income_subsidy_rate: 0.25
+
+  utilization_distribution:
+    Low: 0.40
+    Medium: 0.40
+    High: 0.20
+
+  annual_cost_bucket_distribution:
+    Low_Cost: 0.45
+    Medium_Cost: 0.35
+    High_Cost: 0.15
+    Catastrophic: 0.05
+
+  # Risk score generation
+  risk_score:
+    base_range: [0.5, 1.2]          # Base range for normal patients
+    high_risk_multiplier: [1.3, 2.5]
+    ma_coding_intensity_boost: [0.1, 0.4]   # MA patients get extra boost
+    noise_std: 0.08                  # Random noise for divergence from true burden
+
+  # Missingness (intentional data quality issues)
+  missing_county_rate: 0.05
+  missing_race_rate: 0.03
+
+  # Region and state assignment
+  regions:
+    Northeast:
+      weight: 0.22
+      states: ["NY", "MA", "PA", "NJ", "CT", "RI", "NH", "VT", "ME"]
+    Southeast:
+      weight: 0.28
+      states: ["FL", "GA", "NC", "SC", "VA", "TN", "AL", "MS", "KY", "WV"]
+    Midwest:
+      weight: 0.22
+      states: ["IL", "OH", "MI", "IN", "WI", "MN", "MO", "IA", "KS", "NE"]
+    Southwest:
+      weight: 0.15
+      states: ["TX", "AZ", "NM", "OK", "AR", "LA"]
+    West:
+      weight: 0.13
+      states: ["CA", "WA", "OR", "CO", "NV", "UT", "ID", "MT", "WY", "AK", "HI"]
+
+# -----------------------------------------------------------------------------
+# PART A CLAIMS (CCLF1) PARAMETERS
+# -----------------------------------------------------------------------------
+part_a_claims:
+  claim_type_distribution:
+    "60": 0.20    # Inpatient
+    "40": 0.35    # Outpatient
+    "20": 0.15    # SNF
+    "10": 0.20    # HHA
+    "50": 0.10    # Hospice
+
+  adjustment_rate: 0.05             # 5% of claims have adjustments
+  cancellation_rate: 0.02           # 2% of claims are cancelled
+  denial_rate: 0.08                 # 8% of claims are denied
+
+  payment_ranges:
+    "60":                           # Inpatient
+      min: 3000
+      max: 80000
+      mean: 12000
+      std: 8000
+    "40":                           # Outpatient
+      min: 100
+      max: 8000
+      mean: 800
+      std: 600
+    "20":                           # SNF
+      min: 500
+      max: 15000
+      mean: 3500
+      std: 2000
+    "10":                           # HHA
+      min: 200
+      max: 5000
+      mean: 1200
+      std: 800
+    "50":                           # Hospice
+      min: 300
+      max: 8000
+      mean: 2000
+      std: 1200
+
+  length_of_stay:                   # Inpatient only
+    min: 1
+    max: 45
+    mean: 5
+    std: 4
+
+  overpayment_rate: 0.08            # 8% of claims have simulated overpayment
+  overpayment_pct_range: [0.05, 0.40]   # Overpayment as % of claim amount
+  audit_eligible_rate: 0.85         # 85% of paid claims are audit eligible
+
+  drg_codes:                        # Simplified DRG groups for realism
+    - code: "470"
+      desc: "Major Joint Replacement"
+      weight: 0.08
+    - code: "291"
+      desc: "Heart Failure with MCC"
+      weight: 0.07
+    - code: "392"
+      desc: "Esophagitis with MCC"
+      weight: 0.05
+    - code: "194"
+      desc: "Simple Pneumonia with MCC"
+      weight: 0.06
+    - code: "871"
+      desc: "Septicemia with MV"
+      weight: 0.05
+    - code: "682"
+      desc: "Renal Failure with MCC"
+      weight: 0.05
+    - code: "189"
+      desc: "Pulmonary Edema"
+      weight: 0.04
+    - code: "378"
+      desc: "GI Hemorrhage with MCC"
+      weight: 0.04
+    - code: "065"
+      desc: "Intracranial Hemorrhage"
+      weight: 0.03
+    - code: "603"
+      desc: "Cellulitis with MCC"
+      weight: 0.03
+
+# -----------------------------------------------------------------------------
+# DIAGNOSIS (CCLF4) PARAMETERS
+# -----------------------------------------------------------------------------
+diagnoses:
+  diagnoses_per_claim:
+    prototype:
+      min: 3
+      max: 8
+    full:
+      min: 3
+      max: 12
+
+  ma_extra_diagnosis_boost: [1, 3]  # MA patients get 1-3 extra diagnoses
+  high_risk_extra_diagnosis_boost: [1, 2]
+
+  poa_distribution:                 # Inpatient only
+    "Y": 0.75
+    "N": 0.15
+    "U": 0.07
+    "W": 0.03
+
+  unsupported_dx_rate: 0.04         # 4% of diagnosis rows flagged as unsupported
+  chronic_diagnosis_rate: 0.45
+  hcc_mapped_rate: 0.40
+
+# -----------------------------------------------------------------------------
+# PART B CLAIMS (CCLF5) PARAMETERS
+# -----------------------------------------------------------------------------
+part_b_claims:
+  lines_per_claim:
+    prototype:
+      min: 1
+      max: 4
+    full:
+      min: 1
+      max: 6
+
+  denial_rate: 0.07                 # 7% of claim lines denied
+  adjustment_rate: 0.04
+  cancellation_rate: 0.015
+
+  place_of_service_distribution:
+    "11": 0.45    # Office
+    "22": 0.20    # Outpatient Hospital
+    "21": 0.10    # Inpatient Hospital
+    "02": 0.15    # Telehealth
+    "31": 0.05    # SNF
+    "32": 0.05    # Nursing Facility
+
+  units_of_service:
+    min: 1
+    max: 10
+    typical: 1
+
+  overpayment_rate: 0.06
+  overpayment_pct_range: [0.05, 0.35]
+
+# -----------------------------------------------------------------------------
+# INJECTION FLAGS
+# (Can be toggled independently for debugging)
+# -----------------------------------------------------------------------------
+injection:
+  inject_anomalies: true
+  inject_duplicates: true
+  inject_outliers: true
+  inject_temporal_drift: true
+  inject_missing_values: true
+  inject_invalid_codes: true
+  inject_suspicious_patterns: true
+
+  # Anomaly injection rates
+  duplicate_claim_rate: 0.015       # 1.5% of claims get a duplicate injected
+  duplicate_line_rate: 0.012        # 1.2% of Part B lines get duplicated
+  invalid_code_rate: 0.008          # 0.8% of codes are intentionally invalid
+  negative_payment_rate: 0.025      # 2.5% of adjustments produce negative payments
+
+  # Suspicious provider behavior
+  suspicious_daily_volume_multiplier: 3.0    # Suspicious providers bill 3x normal daily volume
+  outlier_payment_multiplier: [3.0, 8.0]     # Outlier claims are 3-8x expected payment
+  high_denial_provider_rate: 0.15            # High-denial providers have 15%+ denial rate
+
+  # Temporal drift
+  coding_intensity_annual_increase: 0.03     # 3% annual increase in avg diagnosis count
+  telehealth_increase_year: "2021"           # Telehealth spike starts 2021
+  telehealth_increase_multiplier: 2.5        # Telehealth volume 2.5x after spike year
+
+# -----------------------------------------------------------------------------
+# AUDIT SAMPLE PARAMETERS
+# -----------------------------------------------------------------------------
+audit_sample:
+  sample_types:
+    - name: "Random_Sample"
+      type: "Random"
+      size_pct: 0.02                # 2% of audit-eligible claims
+    - name: "Biased_High_Cost"
+      type: "Biased_High_Cost"
+      size_pct: 0.02
+      high_cost_threshold_pct: 0.90 # Top 10% by payment amount
+    - name: "Biased_Provider_Focus"
+      type: "Biased_Provider"
+      size_pct: 0.02
+      target_risk_profiles: ["Suspicious", "Outlier"]
+    - name: "Stratified_Sample"
+      type: "Stratified"
+      size_pct: 0.02
+      strata: ["clm_type_cd", "facility_type"]
+
+  review_result_distribution:
+    Correct: 0.72
+    Overpaid: 0.20
+    Denied: 0.05
+    Unsupported: 0.03
+
+# -----------------------------------------------------------------------------
+# OUTPUT FILE NAMES
+# (Used by all generation scripts)
+# -----------------------------------------------------------------------------
+output_files:
+  procedure_ref: "procedure_ref"
+  diagnosis_ref: "diagnosis_ref"
+  provider_dim: "provider_dim"
+  cclf8: "cclf8_beneficiary"
+  cclf1: "cclf1_part_a_claims"
+  cclf4: "cclf4_diagnoses"
+  cclf5: "cclf5_part_b_claims"
+  audit_sample: "audit_sample"
+  
