@@ -1,7 +1,7 @@
 # CURRENT_STATUS.md
 
 ## Current Phase
-Phase 4 — EDA Notebooks Complete (Full Scale)
+Phase 5 — Next.js Dashboard In Progress (5 of 8 pages complete)
 
 ## Completed
 - Project plan finalized
@@ -27,6 +27,30 @@ Phase 4 — EDA Notebooks Complete (Full Scale)
 - Notebook 03: Extrapolation Simulation — bootstrap 0.4% error (random), 0.2% (stratified)
 - Notebook 04: Provider Benchmarking — p=0.0000 statistical separation, composite score ranking
 - Notebook 05: Anomaly Detection — AUC 0.554 (honest), 100% precision at threshold 2.0, 11.7x flag lift
+- All notebooks committed to GitHub
+- Next.js dashboard scaffolded (v16.2.6, TypeScript, Tailwind, App Router)
+- GCP service account created with BigQuery dataViewer + jobUser roles
+- BigQuery client wired via service account key (./config/service-account-key.json)
+- Generic /api/bigquery POST route working
+- lib/bigquery/client.ts and lib/bigquery/query.ts built
+- lib/bigquery/queries.ts with all executive overview queries
+- Dashboard page 1: Executive Overview — KPIs, risk profile chart, extrapolation chart, top flagged providers table
+- Dashboard page 2: Extrapolation Simulator — interactive controls, CI visualization, interpretation text, strategy comparison
+- Dashboard page 3: Provider Benchmarking — scatter plot, peer group chart, provider table, detail panel
+- Dashboard page 4: Anomaly Detection — detection curve, score distribution, scatter, flag frequency, detail panel
+- Dashboard page 5: Claims Explorer — investigative interface, filters, paginated table, claim detail with diagnoses + adjustment chain
+
+## Dashboard Structure
+| Page                    | Route                      | Status   |
+|-------------------------|----------------------------|----------|
+| Executive Overview      | /executive-overview        | ✅ Done  |
+| Extrapolation Simulator | /extrapolation-simulator   | ✅ Done  |
+| Provider Benchmarking   | /provider-benchmarking     | ✅ Done  |
+| Anomaly Detection       | /anomaly-detection         | ✅ Done  |
+| Claims Explorer         | /claims-explorer           | ✅ Done  |
+| Data Quality Monitor    | /data-quality              | ⬜ Next  |
+| Risk Adjustment         | /risk-adjustment           | ⬜       |
+| Sample Fairness         | /sample-fairness           | ⬜       |
 
 ## Full Scale Dataset Summary
 | Layer               | Tables | Key Rows          |
@@ -37,29 +61,23 @@ Phase 4 — EDA Notebooks Complete (Full Scale)
 | analytics_cms_claims| 9      | ~737K             |
 
 ## Key Analytical Results
-- True overpayment rate: 1.77% ($24.2M on $1,365M total paid)
-- Bootstrap extrapolation error: Random 0.4%, Stratified 0.2%
-- 95% CI width at n=5,796: $6.9M (33% of true overpayment)
+- True overpayment rate: 1.77% ($20.58M on $1.163B total paid, Part A universe)
+- Bootstrap extrapolation error: Random 10.1%, Stratified 2.0%, High-Cost 0.5%, Provider-Focused 5.5%
 - Anomaly score separation: Suspicious mean 13.3 vs Normal 0.67 (p=0.0000)
-- Flag lift: High Denial Rate and Suspicious Patterns = 11.7x over base rate
-- Cumulative detection: 20% provider review = 29% anomalies found (vs 13% random)
+- Flag lift: 1.5x at 20% provider review (31% anomalies found vs 21% random)
+- 435 active providers, 36 Suspicious/Outlier, 17 High Risk tier
 
 ## In Progress
 - Nothing
 
 ## Next Steps
-1. Fix two remaining finding text issues in notebooks 04 and 05 (overpayment rate wording, detection curve)
-2. Commit all notebooks and utilities to GitHub
-3. Begin Next.js dashboard setup
-4. Build dashboard pages in priority order:
-   - Executive Overview
-   - Extrapolation Simulator (centerpiece)
-   - Provider Benchmarking
-   - Anomaly Detection
-   - Claims Explorer
-   - Data Quality Monitor
-   - Risk Adjustment
-   - Sample Fairness
+1. Commit all dashboard work to GitHub
+2. Build Data Quality Monitor page
+3. Build Risk Adjustment / Coding Intensity page
+4. Build Sample Fairness page
+5. Add global navigation bar linking all pages
+6. Polish pass — fix CI bar label clipping on Extrapolation Simulator
+7. Vercel deployment
 
 ## Blockers
 - None

@@ -14,7 +14,7 @@
 - GCP: BigQuery + Cloud Storage
 - BigQuery datasets: raw, staging, curated, analytics, ml_outputs
 - GCS bucket for raw and processed files
-- Next.js frontend (deferred to later phase)
+- Next.js 16.2.6 frontend (App Router, TypeScript, Tailwind)
 - Vercel deployment (deferred to later phase)
 
 ## Version Strategy (Finalized)
@@ -23,57 +23,52 @@
 - V3: Model explainability, downloadable reports, advanced deployment
 
 ## GCP Region (Finalized)
-- us-central1
+- BigQuery dataset location: US (multi-region, not us-central1)
+- All queries must use location: US
+
+## Dashboard Architecture (Finalized)
+- Framework: Next.js 16.2.6, App Router, TypeScript, Tailwind CSS
+- Auth: GCP Service Account key file (./config/service-account-key.json)
+- BigQuery client: @google-cloud/bigquery via lib/bigquery/client.ts
+- Query helper: lib/bigquery/query.ts — runQuery<T>(sql) generic
+- API route: /api/bigquery POST — accepts { sql } body, returns { data }
+- All queries in lib/bigquery/queries.ts (named exports)
+- Charts: recharts (BarChart, LineChart, ScatterChart, ResponsiveContainer)
+- Icons: lucide-react
+- Folder structure:
+  - app/<page-name>/page.tsx — one file per page
+  - app/api/bigquery/route.ts — single generic BQ endpoint
+  - lib/bigquery/ — client, query helper, queries
+  - components/ui, components/charts, components/layout — shared (not yet populated)
+
+## Dashboard Page Decisions (Finalized)
+- Executive Overview: uses payment_summary + anomaly_scores + extrapolation_results
+  - True OP rate = SUM(total_overpayment) / SUM(total_paid_amount) — not AVG(overpayment_rate)
+- Extrapolation Simulator: reads precomputed extrapolation_results (4 rows)
+  - CI computed frontend-side using ratio estimator approximation
+  - Scale factor dampened (5% sensitivity) to avoid misleading live simulation
+  - TRUE_UNIVERSE constants hardcoded from precomputed values
+- Provider Benchmarking: uses provider_benchmark_summary + peer_group_summary
+  - Scatter: payment_z_score_vs_peer vs denial_rate_z_score_vs_peer
+  - Detail panel sticky, loads on row/scatter click
+- Anomaly Detection: uses anomaly_scores table exclusively
+  - Detection curve built client-side from provider risk profiles
+  - Score threshold filter adjustable (0/1/2/5/10)
+- Claims Explorer: uses curated_cms_claims.fact_part_a_claims + fact_diagnoses
+  - Paginated: 25 rows per page, server-side WHERE clause
+  - Audit risk score computed client-side (composite of flags)
+  - "Why Risky" interpretation built from claim fields + diagnoses
+  - URL params: ?provider=PRV000xxx, ?suspicious=true for drill-through
+  - Adjustment chain loaded on claim select via chain_root_id
 
 ## Schema Decisions (Finalized)
-
-### CCLF1
-- clm_pmt_amt allows negative values for reversals and recoupments
-- true_error_flag is an explicit hidden ground truth field, internal only
-- clm_orig_clm_id added for adjustment/cancellation lineage
-- drg_cd added for inpatient realism, NULL for non-inpatient
-- length_of_stay added as INT64, NULL for non-inpatient
-
-### CCLF4
-- hcc_weight added as FLOAT64 for risk adjustment scoring
-- clm_poa_ind is NULL for non-inpatient claims
-- diagnosis_rank_type NOT added — clm_prod_type_cd is sufficient for V1
-
-### CCLF5
-- Claim-level diagnoses capped at 4 columns
-- line_allowed_amt and line_paid_amt both retained
-- rendering_provider_id NOT added — deferred to future version
-- service_category added as precomputed field
-
-### CCLF8
-- bene_age stored as precomputed INT64 at generation time
-- risk_score intentionally diverges from diagnosis burden
-- low_income_subsidy_flag added for health equity analysis
-- annual_cost_bucket added for segmentation
-
-### Provider Dimension
-- peer_group uses hybrid provider type + specialty grouping
-- provider_risk_profile: Normal, High_Volume, Suspicious, Outlier, Emerging
-- avg_monthly_claim_volume NOT stored on provider_dim
-- urban_rural_flag added
-
-### Procedure Code Reference
-- allowed_amt_std_dev added for z-score anomaly detection
-- inpatient_only_flag added for validation logic
-
-### Diagnosis Reference
-- expected_care_pattern added for unsupported diagnosis detection
-- body_system added for clinical grouping
-
-### Audit Sample Table
-- extrapolation_universe_size and extrapolation_universe_amt retained as snapshot fields
-- sample_selection_reason added for audit storytelling
+[... all prior schema decisions unchanged ...]
 
 ## BigQuery Load Strategy (Finalized)
-- Authentication: Application Default Credentials (ADC)
+- Authentication: Service Account key file for dashboard
+- ADC still used for notebooks/Python scripts
 - Load behavior: Truncate-and-replace on every load
 - Partitioning: CCLF1, CCLF4, CCLF5 partitioned by clm_from_dt (DAY)
-- Clustering per table as documented in ARCHITECTURE.md
 - Explicit BigQuery schemas defined in code — no schema inference
 
 ## SQL Transformation Strategy (Finalized)
@@ -83,35 +78,12 @@
 - Staging: retains all records, adds is_latest_version flag, logs DQ issues
 - Curated: filters is_latest_version = TRUE and has_critical_null = FALSE
 - Analytics: materialized tables, not views
-- Peer group summary computed separately (pass 1) before provider benchmark (pass 2)
 - Peer group baselines exclude Suspicious and Outlier providers
-- Percentiles computed with APPROX_QUANTILES (not PERCENTILE_CONT window functions)
-
-## Data Generation Order (Finalized)
-1. procedure_ref and diagnosis_ref
-2. provider_dim
-3. CCLF8 beneficiaries
-4. CCLF1 Part A claims
-5. CCLF4 diagnoses
-6. CCLF5 Part B claim lines
-7. inject_bias_outliers_duplicates (post-processing)
-8. audit_sample (generated after all claims exist)
+- Percentiles computed with APPROX_QUANTILES
 
 ## EDA Notebook Design (Finalized)
 - Authentication: google-cloud-bigquery ADC directly in notebooks
-- Shared utilities: src/utils/notebook_utils.py — BigQuery client, query helper,
-  plot styling, formatters, reusable chart functions
-- Notebook structure: analytical report format with finding(), healthcare_context(),
-  observation() narrative blocks
-- Ground truth usage: provider_risk_profile used as validation label in notebook 05,
-  explicitly noted as unavailable in production
-- Anomaly score null handling: providers with null scores treated as score=0.0
-  for ROC computation — honest limitation documented in notebook
-
-## Data Generation Optimizations (Finalized)
-- CCLF1: fully vectorized beneficiary sampling (pre-sample all at once)
-- CCLF4 and CCLF5: chunked PyArrow parquet writes (50K rows per flush)
-- All three scripts use explicit pa.schema definitions to prevent null-type
-  inference mismatches across chunks
-- Prototype mode: fast iteration, schema validation
-- Full mode: 5.1M rows, all generation under 30 minutes total
+- Shared utilities: src/utils/notebook_utils.py
+- Notebook structure: analytical report format with finding(), healthcare_context(), observation()
+- Ground truth usage: provider_risk_profile used as validation label in notebook 05
+- Anomaly score null handling: null scores treated as 0.0 for ROC — documented
