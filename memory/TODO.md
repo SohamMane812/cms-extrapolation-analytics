@@ -1,28 +1,33 @@
 # TODO.md — Backlog and Future Work
 
 ## Immediate Next Session
-- [ ] Commit all SQL scripts and run_sql.py to GitHub
-- [ ] pip install pandas-gbq — resolve FutureWarning before full scale load
-- [ ] Build notebooks/01_data_quality_eda.ipynb
-- [ ] Build notebooks/02_claims_eda.ipynb
-- [ ] Build notebooks/03_extrapolation_simulation.ipynb
-- [ ] Build notebooks/04_provider_benchmarking.ipynb
-- [ ] Build notebooks/05_anomaly_detection.ipynb
+- [ ] Fix notebook 04 overpayment rate finding text (rates are uniform, not elevated)
+- [ ] Fix notebook 05 cumulative detection curve finding (overpayment recovery is ~equal at 20%)
+- [ ] Commit all notebooks, generation scripts, and utilities to GitHub
+- [ ] Begin Next.js dashboard setup (package.json, tailwind, folder structure)
+- [ ] Build Executive Overview dashboard page
+- [ ] Build Extrapolation Simulator dashboard page (centerpiece)
 
-## V1 Remaining Work
-- [ ] Validate analytical distributions in EDA notebooks
-- [ ] Confirm extrapolation results are analytically meaningful
-- [ ] Confirm anomaly scores correctly rank Suspicious/Outlier providers
-- [ ] Switch to full mode, regenerate data, reload BigQuery
-- [ ] Next.js dashboard setup
+## V1 Dashboard Remaining Work
+- [ ] Next.js project initialization in dashboard/ folder
+- [ ] BigQuery API route setup
 - [ ] Executive Overview page
-- [ ] Claims Explorer page
 - [ ] Extrapolation Simulator page
-- [ ] Sample Fairness page
 - [ ] Provider Benchmarking page
 - [ ] Anomaly Detection page
-- [ ] Risk Adjustment page
+- [ ] Claims Explorer page
 - [ ] Data Quality Monitor page
+- [ ] Risk Adjustment / Coding Intensity page
+- [ ] Sample Fairness page
+- [ ] Vercel deployment
+
+## Known Findings to Address in Dashboard
+- Peer group payment baselines converge ($3.9K-$4.0K) — dashboard should
+  emphasize denial rate and anomaly score differences, not payment alone
+- Anomaly score null blind spot for sparse providers — dashboard should
+  display provider coverage count alongside anomaly tiers
+- Telehealth rate 30-44% is high — note in dashboard as prototype artifact,
+  directional trend is correct
 
 ## V2 Backlog
 - [ ] K-Means clustering for providers (notebook 06)
@@ -34,6 +39,7 @@
 - [ ] rendering_provider_id on CCLF5
 - [ ] inject_bias_outliers_duplicates.py post-processing script
 - [ ] audit_sample generation script
+- [ ] Low-volume provider detection track (separate from z-score scoring)
 
 ## V3 Backlog
 - [ ] Model explainability (SHAP)
@@ -43,6 +49,11 @@
 - [ ] Demo video
 
 ## Technical Debt
-- pandas-gbq not installed — FutureWarning on BigQuery loads
-- peer_group_summary only has 4 rows in prototype (limited peer group coverage at 50 providers)
-- extrapolation_results has 4 rows — will be more meaningful at full scale
+- pandas-gbq FutureWarning — install pandas-gbq>=0.26.1
+- BigQuery Storage module not installed — install google-cloud-bigquery-storage
+  for faster query result downloads at full scale
+- Notebook 03 Cell 4 prototype scale note is now outdated at full scale —
+  update to positive validation note
+- Peer group payment differentiation is weak — consider separating facility
+  types from physician groups in payment benchmarking
+  

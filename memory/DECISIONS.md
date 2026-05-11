@@ -96,3 +96,22 @@
 6. CCLF5 Part B claim lines
 7. inject_bias_outliers_duplicates (post-processing)
 8. audit_sample (generated after all claims exist)
+
+## EDA Notebook Design (Finalized)
+- Authentication: google-cloud-bigquery ADC directly in notebooks
+- Shared utilities: src/utils/notebook_utils.py — BigQuery client, query helper,
+  plot styling, formatters, reusable chart functions
+- Notebook structure: analytical report format with finding(), healthcare_context(),
+  observation() narrative blocks
+- Ground truth usage: provider_risk_profile used as validation label in notebook 05,
+  explicitly noted as unavailable in production
+- Anomaly score null handling: providers with null scores treated as score=0.0
+  for ROC computation — honest limitation documented in notebook
+
+## Data Generation Optimizations (Finalized)
+- CCLF1: fully vectorized beneficiary sampling (pre-sample all at once)
+- CCLF4 and CCLF5: chunked PyArrow parquet writes (50K rows per flush)
+- All three scripts use explicit pa.schema definitions to prevent null-type
+  inference mismatches across chunks
+- Prototype mode: fast iteration, schema validation
+- Full mode: 5.1M rows, all generation under 30 minutes total
