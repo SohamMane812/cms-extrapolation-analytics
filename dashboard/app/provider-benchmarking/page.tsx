@@ -553,7 +553,7 @@ export default function ProviderBenchmarkingPage() {
                   { label: "State", value: selectedProvider.state },
                   { label: "Urban/Rural", value: selectedProvider.urban_rural },
                   { label: "Tenure", value: selectedProvider.provider_tenure_bucket },
-                  { label: "Peer Group Size", value: selectedProvider.peer_group_size ?? "—" },
+                  { label: "Peer Group Size", value: (selectedProvider as any).peer_group_size ?? "—" },
                 ].map((m) => (
                   <div key={m.label} className="rounded bg-slate-800/50 p-2">
                     <p className="text-slate-500">{m.label}</p>
