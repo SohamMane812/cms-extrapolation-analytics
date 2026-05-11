@@ -1,10 +1,11 @@
 # DECISIONS.md — Finalized Decisions
 
-## Data Scale (Finalized)
-- Beneficiaries: 75K actual
-- Providers: ~444 active
-- Part A Claims: ~400K
-- Total: 5,104,395 rows across 7 tables
+## Project Version History
+- **V1**: Analytical implementation — warehouse, pipeline, notebooks, dashboard infrastructure
+- **V2**: Productization — operational language, UX, workflow framing, business interpretation
+- **V3**: Optional enhancement — cross-page navigation, ML, performance, demo assets
+
+---
 
 ## Stack (Finalized)
 - Python venv, GCP BigQuery + Cloud Storage
@@ -12,59 +13,93 @@
 - Vercel deployment — https://cms-extrapolation-analytics.vercel.app
 - GitHub: github.com/SohamMane812/cms-extrapolation-analytics
 
+---
+
 ## V2 Design Philosophy (Finalized)
+
+### Platform Identity
+The platform is a **healthcare audit analytics decision-support tool** — not a generic dashboard,
+not a coding demo, not an academic notebook. Every design and language decision should reinforce
+operational realism, audit workflow orientation, and executive explainability.
+
+### Audience
+- LinkedIn connections and healthcare analytics professionals
+- Recruiters and hiring managers
+- Data leaders and audit/risk teams
+- Healthcare analytics interviewers
+
+### Language Standards
 - Surface language: business-first, audit-operational, investigation-oriented
-- Technical depth: preserved underneath, accessible via expandable sections
-- Tone: analytically mature, trustworthy, honest about limitations
-- Audience: LinkedIn, recruiters, healthcare analytics professionals, data leaders
-- Goal: platform demonstrates domain knowledge + statistical reasoning + business interpretation
-- Avoid: generic dashboard feel, academic notebook feel, technical demo feel
+- Technical depth: preserved underneath, accessible via interpretation blocks
+- Tone: analytically mature, honest about limitations, never accusatory
+- Framing: signals and indicators — not confirmed fraud or abuse
+- Every chart gets a "so what" interpretation block
+- Every page gets Key Findings insight cards
+- Every KPI gets helper text explaining scope and calculation
 
-## V2 Language Standards (Finalized)
-- Always explain WHY a metric matters, not just WHAT it is
-- Every chart gets a 1-line "so what" subtitle
-- Key Findings sections use business language, not statistical jargon
-- Limitations and assumptions are surfaced, not hidden
-- "Potential" qualifier used for unconfirmed overpayments
-- "Elevated Audit Risk" preferred over generic "High Risk"
+### What the Platform Demonstrates
+1. Healthcare domain knowledge (HCC coding, post-payment audits, CMS CCLF format)
+2. Statistical reasoning (extrapolation, CI, anomaly scoring, z-scores)
+3. Data engineering (BigQuery pipeline, staging/curated/analytics layers)
+4. Business interpretation (translating analytics into operational decisions)
+5. Audit workflow understanding (provider triage, claim investigation, sample design)
+6. Governance maturity (data quality monitoring, fairness analysis, transparency)
 
-## GCP Region (Finalized)
-- BigQuery dataset location: US (multi-region)
-- All queries use location: US
+---
 
 ## Dashboard Architecture (Finalized)
+
+### Infrastructure
 - Auth: GCP Service Account
   - Local: GOOGLE_APPLICATION_CREDENTIALS → ./config/service-account-key.json
-  - Vercel: GOOGLE_CREDENTIALS_JSON → full JSON string
-- lib/bigquery/client.ts: supports both auth modes with fallback to ADC
+  - Vercel: GOOGLE_CREDENTIALS_JSON → full JSON string env var
+- lib/bigquery/client.ts: supports both auth modes with ADC fallback
 - API: /api/bigquery POST → { sql } → { data }
 - Root redirect: / → /executive-overview
 - vercel.json in dashboard/ with framework: nextjs
-- Vercel Root Directory setting: dashboard
-- TypeScript strict: false (recharts formatter compatibility)
+- Vercel Root Directory: dashboard
+- TypeScript strict: false (recharts formatter compatibility — re-enable in V3)
 
-## Dashboard Pages (Finalized — V1)
-All 8 pages live. See CURRENT_STATUS.md for routes and status.
+### Page Architecture Decisions
+All pages follow this V2 structure:
+1. Page header (title + subtitle with operational framing)
+2. Context banner (explains why this page matters for audit)
+3. KPIs with helper text (scope and calculation clarification)
+4. Charts with interpretation blocks ("so what" before each chart)
+5. Key Findings section (3-5 business-language insight cards)
+6. Interpretation/methodology panel (clinical or operational context)
 
-Key query decisions:
-- Executive Overview OP rate: SUM(overpayment) / SUM(paid) — not AVG(rate)
-- Extrapolation CI: ratio estimator, frontend-computed, dampened scale factor
-- Detection curve: client-side from provider risk profiles
-- Claims pagination: 25/page, server-side WHERE clause
-- Adjustment chain: loaded via chain_root_id on claim select
+### Key Terminology Decisions (V2)
+| Old | New |
+|---|---|
+| Composite Anomaly Score | Composite Audit Risk Score |
+| Anomaly Risk Tier | Audit Priority Tier |
+| Detection Curve | Audit Review Efficiency Curve |
+| Flag Frequency | Audit Signal Frequency |
+| Score Threshold | Review Threshold |
+| Estimated Overpayment | Projected Recoverable Overpayment |
+| Estimation Error | Projection Bias |
+| CI Width | Recovery Uncertainty Range |
+| Sample Coverage | Claims Reviewed |
+| Provider Rankings | Provider Audit Risk Rankings |
+| Peer Benchmarks | Peer Group Comparison |
+| Claim Details | Claim Review Summary |
+| Risk Indicators | Audit Review Indicators |
+| DQ Issues | Data Quality Findings |
+| Pipeline Status | Warehouse Processing Status |
+| Risk Score | Patient Risk Burden Score |
+| HCC Weight | Risk Contribution Weight |
+| Coding Intensity | Diagnosis Coding Intensity |
+| Sample Fairness | Audit Sample Fairness & Representation |
+| Disparity Ratios | Payment Representation Variance |
+
+---
 
 ## BigQuery Dataset Structure (Finalized)
 - raw_cms_claims: 7 tables, 5,104,395 rows
-- staging_cms_claims: 6 tables, 5,140,615 rows (DQ issues logged)
+- staging_cms_claims: 6 tables, 5,140,615 rows (DQ findings logged)
 - curated_cms_claims: 8 tables, 4,652,849 rows (is_latest_version=TRUE)
 - analytics_cms_claims: 9 tables, ~737K rows (materialized aggregates)
-- ml_outputs: empty (V3)
-
-Key curated tables:
-- fact_part_a_claims — claim_id, chain_root_id, adjustment lineage, overpayment flags
-- fact_diagnoses — HCC mapping, chronic flags, unsupported dx detection
-- dim_provider — peer group, risk profile, benchmarks
-- dim_beneficiary — demographics, risk score, dual status
 
 Key analytics tables:
 - payment_summary — claim_source = 'Part_A' or 'Part_B'
@@ -77,15 +112,22 @@ Key analytics tables:
 - peer_group_summary — peer baselines excluding Suspicious/Outlier
 - denial_summary — by provider, claim type, year/month
 
+### Important Data Distinctions
+- Executive Overview OP total: $24.2M (all Part A claims in payment_summary)
+- Extrapolation universe OP: $20.58M (audit-eligible claims only, 289,837 claims)
+- These are different and must be labeled distinctly throughout the UI
+
+---
+
 ## SQL Pipeline (Finalized)
 - 23 scripts, fully idempotent (CREATE OR REPLACE TABLE)
 - run_sql.py orchestrates all layers
-- Staging → Curated drop: 9.5% (duplicate resolution, not DQ failures)
+- Staging → Curated drop: 9.5% (duplicate resolution, not data loss)
 - Peer group baselines exclude Suspicious and Outlier providers
 - Percentiles: APPROX_QUANTILES
 
-## Key Gitignore Rules (Finalized)
+## Gitignore Rules (Finalized)
 - Removed bare *.json from root .gitignore
 - Specific exclusions: service_account*.json, gcp_key*.json, **/service-account-key.json
-- vercel.json explicitly allowed via !vercel.json
+- vercel.json explicitly allowed via !vercel.json exception
 - dashboard/.gitignore excludes .env* files
