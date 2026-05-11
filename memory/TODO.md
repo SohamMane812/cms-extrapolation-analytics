@@ -1,83 +1,96 @@
-# TODO.md — V2 Backlog and Future Work
+# TODO.md — V2 Product Polish Backlog
 
-## V2 Phase — Product Polish (Next Session Focus)
+## V2 Priority 1 — Trust & Accuracy
+- [ ] Audit all executive KPIs — verify numerator/denominator, check against notebook outputs
+- [ ] Validate extrapolation totals match Notebook 03 outputs
+- [ ] Validate anomaly score distributions match Notebook 05
+- [ ] Fix Dual Eligible Rate KPI on Sample Fairness (currently shows wrong %)
+- [ ] Fix denial rate chart colors on Sample Fairness page
+- [ ] Document any known approximations or limitations inline
 
-### Product Feel & UX
-- [ ] Loading skeletons on all pages instead of spinner
-- [ ] Error boundary components with helpful messages
-- [ ] Empty state illustrations for filtered results
-- [ ] Smooth page transitions
-- [ ] Mobile responsiveness pass on all pages
-- [ ] Tooltip improvements — richer context on hover
-- [ ] Keyboard navigation support
+## V2 Priority 2 — Business-First Language
+Rename across all pages:
+- [ ] "Bootstrap Confidence Interval" → "Projected Recovery Range"
+- [ ] "High Risk" → "Elevated Audit Risk"
+- [ ] "Anomaly Score" → "Audit Risk Score" (or keep both with explanation)
+- [ ] "Composite Anomaly Score" → "Composite Audit Risk Score"
+- [ ] "Overpayment" → "Potential Overpayment" where appropriate
+- [ ] "Universe" → "Total Claim Population" in simulator
+- [ ] "Biased_High_Cost" → "High-Cost Focused" in simulator
+- [ ] "Biased_Provider" → "Provider-Focused" in simulator
+- [ ] Page subtitle copy — make each page subtitle operational/business-oriented
+- [ ] KPI card labels — review all for business clarity
 
-### Storytelling & Narrative
-- [ ] Add "About this analysis" context banners to each page
-- [ ] Executive Overview — add a narrative summary section at top explaining what the dashboard shows
-- [ ] Extrapolation Simulator — improve interpretation text for each strategy with more specific language
-- [ ] Anomaly Detection — add "What to do next" action guidance below detection curve
-- [ ] Claims Explorer — add "Investigation Guide" sidebar explaining audit workflow
-- [ ] Each page should have a consistent "Key Takeaways" section
+## V2 Priority 3 — "Why This Matters" Blocks
+Add to each page:
+- [ ] Executive Overview — "What this dashboard tells you"
+- [ ] Extrapolation Simulator — "Why sample strategy matters for audit recovery"
+- [ ] Provider Benchmarking — "How peer comparison supports audit targeting"
+- [ ] Anomaly Detection — "How to use this for audit prioritization"
+- [ ] Claims Explorer — "Investigation workflow guide"
+- [ ] Data Quality Monitor — "How data quality affects audit reliability"
+- [ ] Risk Adjustment — "Why HCC coding is an audit target"
+- [ ] Sample Fairness — "Why demographic equity matters in audit design"
 
-### Dashboard UX Refinements
-- [ ] Cross-page drill-through navigation
-  - Provider Benchmarking → Claims Explorer (filter by provider_id)
-  - Anomaly Detection → Claims Explorer (filter by suspicious providers)
-  - "Investigate Claims →" button on provider detail panels
-- [ ] Claims Explorer: add date range filter
-- [ ] Claims Explorer: add export to CSV button
-- [ ] Provider Benchmarking: add "Compare providers" side-by-side view
-- [ ] Extrapolation Simulator: fix CI bar label clipping at bottom
-- [ ] Extrapolation Simulator: fix Estimation Error direction sub-label
-- [ ] Executive Overview: add trend arrows on KPI cards (vs prior period)
-- [ ] Anomaly Detection: show provider coverage count alongside anomaly tiers
+## V2 Priority 4 — Key Findings Cards
+Add 3-5 insight bullets per page in business language:
+- [ ] Executive Overview findings
+- [ ] Extrapolation Simulator findings (per strategy)
+- [ ] Provider Benchmarking findings
+- [ ] Anomaly Detection findings
+- [ ] Claims Explorer — contextual findings based on active filters
+- [ ] Data Quality Monitor findings
+- [ ] Risk Adjustment findings
+- [ ] Sample Fairness findings
 
-### Business Interpretation Polish
-- [ ] Add $ impact callouts — "This would recover $X in overpayments"
-- [ ] Add audit priority queue — ranked list of recommended next actions
-- [ ] Add benchmark context — "This rate is Xth percentile nationally"
-- [ ] Sample Fairness: improve disparity ratio explanation
-- [ ] Risk Adjustment: add upcoding alert threshold indicators
+## V2 Priority 5 — Methodology Transparency
+Expandable "How this is calculated" sections for:
+- [ ] Extrapolation estimate and CI
+- [ ] Composite anomaly score
+- [ ] Provider peer benchmarking z-scores
+- [ ] Risk adjustment / HCC weighting
+- [ ] Audit risk score on Claims Explorer
 
-### Demo & LinkedIn Presentation
-- [ ] Record 3-minute walkthrough video
-- [ ] Write LinkedIn post with key results and architecture summary
-- [ ] Create architecture diagram (GCP → BigQuery → Next.js → Vercel)
-- [ ] Add README.md with project overview, tech stack, and live demo link
-- [ ] Add screenshot gallery to GitHub repo
-- [ ] Create executive one-pager PDF summarizing findings
+## V2 Priority 6 — Cross-Page Workflow Navigation
+- [ ] "Investigate Claims →" button on Provider Benchmarking detail panel
+- [ ] "Investigate Claims →" button on Anomaly Detection detail panel
+- [ ] Anomaly Detection → Claims Explorer with provider filter pre-applied
+- [ ] Provider Benchmarking → Claims Explorer with provider filter pre-applied
+- [ ] Breadcrumb trail showing drill-down path
+- [ ] "Back to [page]" navigation links
 
-### Technical Polish
-- [ ] Add loading skeletons using Tailwind animate-pulse
-- [ ] Implement React Suspense boundaries properly
-- [ ] Add error retry logic on BigQuery API failures
-- [ ] Optimize BigQuery queries — add LIMIT guards on large tables
-- [ ] Add query caching layer (React Query or SWR)
-- [ ] Fix: Dual Eligible Rate KPI on Sample Fairness page
-- [ ] Fix: Denial rate chart colors on Sample Fairness page
-- [ ] Fix: Risk Score & Chronic Burden chart legend order
+## V2 Priority 7 — Visual Polish
+- [ ] Replace all spinners with loading skeletons (Tailwind animate-pulse)
+- [ ] Reduce KPI card count where pages feel overloaded
+- [ ] Mute color palette — less red/yellow alarm overload
+- [ ] More whitespace and breathing room between sections
+- [ ] Consistent section header style across all pages
+- [ ] Chart subtitle copy — every chart should have a 1-line "so what"
+- [ ] Mobile responsiveness pass
 
-## V2 Analytics Backlog
-- [ ] K-Means clustering for providers (notebook 06)
+## V2 Priority 8 — Demo & LinkedIn Readiness
+- [ ] README.md — live URL, architecture diagram, key findings, tech stack
+- [ ] Architecture diagram (GCP → BigQuery → Next.js → Vercel)
+- [ ] Screenshot gallery in GitHub repo
+- [ ] 3-minute demo walkthrough script
+- [ ] LinkedIn post draft (key results + live link)
+- [ ] Executive one-pager PDF (optional)
+
+## V3 Backlog (Future)
+- [ ] K-Means provider clustering (notebook 06)
 - [ ] ML claim overpayment prediction (notebook 07)
 - [ ] ML model validation (notebook 08)
-- [ ] Coding intensity deep analysis
 - [ ] Dashboard: Clustering page
 - [ ] Dashboard: ML Model Results page
-- [ ] rendering_provider_id on CCLF5
-- [ ] audit_sample generation script
-- [ ] Low-volume provider detection track
-
-## V3 Backlog
 - [ ] Model explainability (SHAP)
 - [ ] Downloadable audit reports
-- [ ] User authentication (Clerk or NextAuth)
-- [ ] Advanced Vercel deployment polish
-- [ ] Custom domain
+- [ ] User authentication
+- [ ] audit_sample generation script
+- [ ] rendering_provider_id on CCLF5
 
 ## Technical Debt
+- tsconfig.json strict mode disabled — re-enable after fixing recharts formatter types
 - pandas-gbq FutureWarning — install pandas-gbq>=0.26.1
 - BigQuery Storage module not installed — install google-cloud-bigquery-storage
-- Notebook 03 Cell 4 prototype scale note outdated — update to positive validation note
+- Notebook 03 Cell 4 prototype scale note outdated
 - Peer group payment differentiation weak — consider separating facility types
-- tsconfig.json strict mode disabled — re-enable after fixing recharts formatter types properly

@@ -1,102 +1,91 @@
 # DECISIONS.md — Finalized Decisions
 
 ## Data Scale (Finalized)
-- Beneficiaries: 50K–100K (actual: 75K)
-- Providers: 500–2,000 (actual: ~444 active)
-- Part A Claims (CCLF1): 300K–500K (actual: ~400K)
-- Diagnosis Rows (CCLF4): 1M–2M
-- Part B Claim Lines (CCLF5): 500K–1.5M
-- Total: 5,104,395 rows
+- Beneficiaries: 75K actual
+- Providers: ~444 active
+- Part A Claims: ~400K
+- Total: 5,104,395 rows across 7 tables
 
 ## Stack (Finalized)
-- Python venv (no conda)
-- .env files for all config/secrets
-- GCP: BigQuery + Cloud Storage
-- BigQuery datasets: raw, staging, curated, analytics, ml_outputs
-- GCS bucket for raw and processed files
-- Next.js 16.2.6 frontend (App Router, TypeScript, Tailwind)
-- Vercel deployment — live at https://cms-extrapolation-analytics.vercel.app
+- Python venv, GCP BigQuery + Cloud Storage
+- Next.js 16.2.6, App Router, TypeScript, Tailwind CSS
+- Vercel deployment — https://cms-extrapolation-analytics.vercel.app
+- GitHub: github.com/SohamMane812/cms-extrapolation-analytics
 
-## Version Strategy (Finalized)
-- V1: Data generation, EDA, extrapolation, provider benchmarking, anomaly detection, full dashboard ✅ COMPLETE
-- V2: Product polish, UX refinement, clustering, ML prediction
-- V3: Model explainability, downloadable reports, advanced deployment
+## V2 Design Philosophy (Finalized)
+- Surface language: business-first, audit-operational, investigation-oriented
+- Technical depth: preserved underneath, accessible via expandable sections
+- Tone: analytically mature, trustworthy, honest about limitations
+- Audience: LinkedIn, recruiters, healthcare analytics professionals, data leaders
+- Goal: platform demonstrates domain knowledge + statistical reasoning + business interpretation
+- Avoid: generic dashboard feel, academic notebook feel, technical demo feel
+
+## V2 Language Standards (Finalized)
+- Always explain WHY a metric matters, not just WHAT it is
+- Every chart gets a 1-line "so what" subtitle
+- Key Findings sections use business language, not statistical jargon
+- Limitations and assumptions are surfaced, not hidden
+- "Potential" qualifier used for unconfirmed overpayments
+- "Elevated Audit Risk" preferred over generic "High Risk"
 
 ## GCP Region (Finalized)
-- BigQuery dataset location: US (multi-region, not us-central1)
-- All queries must use location: US
+- BigQuery dataset location: US (multi-region)
+- All queries use location: US
 
 ## Dashboard Architecture (Finalized)
-- Framework: Next.js 16.2.6, App Router, TypeScript, Tailwind CSS
-- Auth: GCP Service Account key file
-  - Local: ./config/service-account-key.json via GOOGLE_APPLICATION_CREDENTIALS
-  - Vercel: full JSON content via GOOGLE_CREDENTIALS_JSON env var
-- BigQuery client: lib/bigquery/client.ts — supports both auth modes
-- Query helper: lib/bigquery/query.ts — runQuery<T>(sql) generic
-- API route: /api/bigquery POST — accepts { sql } body, returns { data }
-- Queries: lib/bigquery/queries.ts (named exports for executive overview)
-- Charts: recharts (BarChart, LineChart, ScatterChart, PieChart, RadarChart)
-- Root redirect: app/page.tsx → /executive-overview
-- Vercel config: dashboard/vercel.json with framework: nextjs
-- Root directory: dashboard/ (set in Vercel project settings)
-- TypeScript strict mode: disabled (recharts formatter type compatibility)
+- Auth: GCP Service Account
+  - Local: GOOGLE_APPLICATION_CREDENTIALS → ./config/service-account-key.json
+  - Vercel: GOOGLE_CREDENTIALS_JSON → full JSON string
+- lib/bigquery/client.ts: supports both auth modes with fallback to ADC
+- API: /api/bigquery POST → { sql } → { data }
+- Root redirect: / → /executive-overview
+- vercel.json in dashboard/ with framework: nextjs
+- Vercel Root Directory setting: dashboard
+- TypeScript strict: false (recharts formatter compatibility)
 
-## Dashboard Page Decisions (Finalized)
-- Executive Overview: payment_summary + anomaly_scores + extrapolation_results
-  - True OP rate = SUM(total_overpayment) / SUM(total_paid_amount)
-- Extrapolation Simulator: precomputed extrapolation_results (4 rows)
-  - CI computed frontend-side using ratio estimator approximation
-  - TRUE_UNIVERSE constants hardcoded from precomputed values
-  - Scale factor dampened (5% sensitivity)
-- Provider Benchmarking: provider_benchmark_summary + peer_group_summary
-  - Scatter: payment_z_score_vs_peer vs denial_rate_z_score_vs_peer
-  - Detail panel sticky, loads on row/scatter click
-- Anomaly Detection: anomaly_scores table
-  - Detection curve built client-side from provider risk profiles
-  - Score threshold filter: 0/1/2/5/10
-- Claims Explorer: curated_cms_claims.fact_part_a_claims + fact_diagnoses
-  - Paginated: 25 rows per page, server-side WHERE clause
-  - Audit risk score computed client-side
-  - "Why Risky" interpretation built dynamically from claim + diagnosis fields
-  - URL params: ?provider=PRV000xxx, ?suspicious=true for drill-through
-  - Adjustment chain loaded via chain_root_id
-- Data Quality Monitor: analytics_cms_claims.data_quality_summary + staging DQ issues
-  - Pipeline flow: Raw → Staging → Curated → Analytics
-  - Clickable table/issue filters load record-level samples
-- Risk Adjustment: patient_risk_summary + coding_intensity_summary
-  - Filters: claim year, utilization segment
-  - Charts: risk by age, HCC weight, coding intensity trend, cost bucket, scatter
-- Sample Fairness: patient_risk_summary + fact_part_a_claims JOIN
-  - Tabbed: Race / Sex / Region / Dual Status
-  - Disparity ratios vs White baseline
-  - Denial rate by race from claim-level join
+## Dashboard Pages (Finalized — V1)
+All 8 pages live. See CURRENT_STATUS.md for routes and status.
 
-## Key Gitignore Decisions
-- Root .gitignore: removed bare *.json rule — was blocking package.json, tsconfig.json
-- Specific credential exclusions: service_account*.json, gcp_key*.json, **/service-account-key.json
-- dashboard/.gitignore: .env* excluded (service account path stays local only)
-- vercel.json: explicitly allowed via !vercel.json exception
+Key query decisions:
+- Executive Overview OP rate: SUM(overpayment) / SUM(paid) — not AVG(rate)
+- Extrapolation CI: ratio estimator, frontend-computed, dampened scale factor
+- Detection curve: client-side from provider risk profiles
+- Claims pagination: 25/page, server-side WHERE clause
+- Adjustment chain: loaded via chain_root_id on claim select
 
-## BigQuery Load Strategy (Finalized)
-- Authentication: Service Account for dashboard, ADC for notebooks/Python
-- Load behavior: Truncate-and-replace on every load
-- Partitioning: CCLF1, CCLF4, CCLF5 partitioned by clm_from_dt (DAY)
-- Clustering per table as documented in ARCHITECTURE.md
-- Explicit BigQuery schemas — no schema inference
+## BigQuery Dataset Structure (Finalized)
+- raw_cms_claims: 7 tables, 5,104,395 rows
+- staging_cms_claims: 6 tables, 5,140,615 rows (DQ issues logged)
+- curated_cms_claims: 8 tables, 4,652,849 rows (is_latest_version=TRUE)
+- analytics_cms_claims: 9 tables, ~737K rows (materialized aggregates)
+- ml_outputs: empty (V3)
 
-## SQL Transformation Strategy (Finalized)
-- All SQL scripts: CREATE OR REPLACE TABLE — fully idempotent
-- Template variables: {raw}, {staging}, {curated}, {analytics}, {ml}
-- run_sql.py: orchestrates all layers with dry-run support and skip flags
-- Staging: retains all records, adds is_latest_version flag, logs DQ issues
-- Curated: filters is_latest_version = TRUE and has_critical_null = FALSE
-- Analytics: materialized tables, not views
+Key curated tables:
+- fact_part_a_claims — claim_id, chain_root_id, adjustment lineage, overpayment flags
+- fact_diagnoses — HCC mapping, chronic flags, unsupported dx detection
+- dim_provider — peer group, risk profile, benchmarks
+- dim_beneficiary — demographics, risk score, dual status
+
+Key analytics tables:
+- payment_summary — claim_source = 'Part_A' or 'Part_B'
+- provider_benchmark_summary — z-scores, percentiles, peer comparisons
+- anomaly_scores — composite score, 7 audit flags, risk tier
+- extrapolation_results — 4 sample types, precomputed
+- data_quality_summary — 3 issue types, all Low severity
+- patient_risk_summary — HCC weight, chronic count, demographics
+- coding_intensity_summary — by year, utilization segment, cost bucket
+- peer_group_summary — peer baselines excluding Suspicious/Outlier
+- denial_summary — by provider, claim type, year/month
+
+## SQL Pipeline (Finalized)
+- 23 scripts, fully idempotent (CREATE OR REPLACE TABLE)
+- run_sql.py orchestrates all layers
+- Staging → Curated drop: 9.5% (duplicate resolution, not DQ failures)
 - Peer group baselines exclude Suspicious and Outlier providers
 - Percentiles: APPROX_QUANTILES
 
-## EDA Notebook Design (Finalized)
-- Authentication: google-cloud-bigquery ADC directly in notebooks
-- Shared utilities: src/utils/notebook_utils.py
-- Notebook structure: analytical report format with finding(), healthcare_context(), observation()
-- Ground truth: provider_risk_profile used as validation label in notebook 05
-- Anomaly score null handling: null scores = 0.0 for ROC — documented as honest limitation
+## Key Gitignore Rules (Finalized)
+- Removed bare *.json from root .gitignore
+- Specific exclusions: service_account*.json, gcp_key*.json, **/service-account-key.json
+- vercel.json explicitly allowed via !vercel.json
+- dashboard/.gitignore excludes .env* files
