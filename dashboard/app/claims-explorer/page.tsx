@@ -70,14 +70,6 @@ interface AdjChain {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const RISK_COLORS: Record<string, string> = {
-  Outlier: "#ef4444",
-  Suspicious: "#f97316",
-  High_Volume: "#eab308",
-  Normal: "#22c55e",
-  Emerging: "#3b82f6",
-};
-
 const STATUS_STYLES: Record<string, string> = {
   Paid: "bg-green-900/50 text-green-300 border-green-700",
   Denied: "bg-red-900/50 text-red-300 border-red-700",
@@ -85,10 +77,15 @@ const STATUS_STYLES: Record<string, string> = {
   Cancelled: "bg-slate-700/50 text-slate-400 border-slate-600",
 };
 
+const RISK_COLORS: Record<string, string> = {
+  Outlier: "#ef4444", Suspicious: "#f97316", High_Volume: "#eab308",
+  Normal: "#22c55e", Emerging: "#3b82f6",
+};
+
 const ADJ_TYPE_LABELS: Record<string, string> = {
-  "0": "Original",
+  "0": "Original Claim",
   "1": "Cancellation",
-  "2": "Adjustment",
+  "2": "Adjustment/Revision",
 };
 
 const PAGE_SIZE = 25;
@@ -110,7 +107,7 @@ function fmtDate(d: { value: string } | string | null | undefined): string {
   return s?.slice(0, 10) ?? "—";
 }
 
-function getRiskScore(claim: Claim): number {
+function getAuditRiskScore(claim: Claim): number {
   let score = 0;
   if (claim.has_overpayment) score += 3;
   if (claim.is_true_error) score += 3;
@@ -122,133 +119,115 @@ function getRiskScore(claim: Claim): number {
   return score;
 }
 
-function getRiskLabel(score: number): { label: string; color: string; bg: string } {
-  if (score >= 6) return { label: "Critical", color: "#ef4444", bg: "bg-red-900/40 border-red-700 text-red-300" };
-  if (score >= 4) return { label: "High", color: "#f97316", bg: "bg-orange-900/40 border-orange-700 text-orange-300" };
-  if (score >= 2) return { label: "Medium", color: "#eab308", bg: "bg-yellow-900/40 border-yellow-700 text-yellow-300" };
-  return { label: "Low", color: "#22c55e", bg: "bg-green-900/40 border-green-700 text-green-300" };
+function getAuditRiskLevel(score: number): { label: string; color: string; bg: string } {
+  if (score >= 6) return { label: "Critical Review Priority", color: "#ef4444", bg: "bg-red-900/40 border-red-700 text-red-300" };
+  if (score >= 4) return { label: "High Review Priority", color: "#f97316", bg: "bg-orange-900/40 border-orange-700 text-orange-300" };
+  if (score >= 2) return { label: "Moderate Review Priority", color: "#eab308", bg: "bg-yellow-900/40 border-yellow-700 text-yellow-300" };
+  return { label: "Routine Review", color: "#22c55e", bg: "bg-green-900/40 border-green-700 text-green-300" };
 }
 
-function buildWhyRisky(claim: Claim, diagnoses: Diagnosis[]): string[] {
-  const reasons: string[] = [];
-  if (claim.is_true_error) reasons.push("Claim contains a confirmed billing error — overpayment was identified in audit.");
-  if (claim.has_overpayment) reasons.push(`Overpayment of ${fmt$(claim.overpayment_amount)} detected on this claim.`);
-  if (claim.is_denied) reasons.push(`Claim was denied${claim.denial_reason_code ? ` (reason code: ${claim.denial_reason_code})` : ""} — denied claims indicate documentation or coverage issues.`);
-  if (claim.adjustment_type === "2") reasons.push("This claim is part of an adjustment chain — original claim was subsequently modified, which may indicate corrected billing or post-payment review activity.");
-  if (claim.adjustment_type === "1") reasons.push("This claim was cancelled — cancellations may indicate a billing reversal or recoupment.");
-  if (["Suspicious", "Outlier"].includes(claim.provider_risk_profile))
-    reasons.push(`Provider is flagged as ${claim.provider_risk_profile} risk — this provider has elevated composite anomaly scores and multiple audit flags.`);
-  if (claim.payment_amount > 10000) reasons.push(`High-dollar claim (${fmt$(claim.payment_amount)}) — payments above $10K receive additional scrutiny in post-payment review.`);
-  if (claim.patient_risk_score > 2) reasons.push(`Patient has elevated risk score (${claim.patient_risk_score.toFixed(2)}) — high-risk patients may have unsupported diagnosis coding.`);
+function buildAuditReviewIndicators(claim: Claim, diagnoses: Diagnosis[]): { signal: string; explanation: string; severity: "high" | "medium" | "low" }[] {
+  const indicators: { signal: string; explanation: string; severity: "high" | "medium" | "low" }[] = [];
+
+  if (claim.is_true_error) {
+    indicators.push({ signal: "Confirmed Billing Error", explanation: "This claim contains a confirmed billing error identified during audit review. The overpayment amount reflects the difference between amount paid and amount owed.", severity: "high" });
+  }
+  if (claim.has_overpayment) {
+    indicators.push({ signal: "Potential Overpayment Signal", explanation: `Overpayment of ${fmt$(claim.overpayment_amount)} identified on this claim. The billed and paid amount exceeds what is supportable based on documentation and coding review.`, severity: "high" });
+  }
+  if (claim.is_denied) {
+    indicators.push({ signal: "Claim Denied During Adjudication", explanation: `Claim was denied${claim.denial_reason_code ? ` (denial code: ${claim.denial_reason_code})` : ""}. Denied claims may indicate documentation deficiencies, coverage limitations, or coding errors that require clinical review.`, severity: "medium" });
+  }
+  if (claim.adjustment_type === "2") {
+    indicators.push({ signal: "Claim Adjustment & Revision History", explanation: "This claim has been subsequently adjusted — the original claim was modified after initial submission. Repeated adjustments on a provider's claims may indicate systematic billing corrections or retroactive claim manipulation.", severity: "medium" });
+  }
+  if (claim.adjustment_type === "1") {
+    indicators.push({ signal: "Claim Cancellation", explanation: "This claim was cancelled after submission. Cancellations may represent legitimate billing reversals, recoupments, or indicate a billing error that was self-identified.", severity: "medium" });
+  }
+  if (["Suspicious", "Outlier"].includes(claim.provider_risk_profile)) {
+    indicators.push({ signal: "Elevated Billing Risk — Provider Context", explanation: `The billing provider (${claim.provider_id}) carries a ${claim.provider_risk_profile} risk profile based on peer group deviation analysis. This claim is part of a broader pattern warranting provider-level review.`, severity: "high" });
+  }
+  if (claim.payment_amount > 10000) {
+    indicators.push({ signal: "High-Dollar Claim", explanation: `Billed amount of ${fmt$(claim.payment_amount)} exceeds the $10K threshold for enhanced review. High-dollar claims warrant additional documentation verification to confirm medical necessity and coding accuracy.`, severity: "medium" });
+  }
+  if (claim.patient_risk_score > 2) {
+    indicators.push({ signal: "High-Risk Patient Profile", explanation: `Patient risk score of ${claim.patient_risk_score.toFixed(2)} indicates elevated clinical complexity. High-risk scores combined with high-dollar billing may indicate HCC coding inflation or unsupported diagnosis assignments.`, severity: "medium" });
+  }
   const unsupported = diagnoses.filter((d) => d.is_suspected_unsupported);
-  if (unsupported.length > 0) reasons.push(`${unsupported.length} diagnosis code(s) flagged as potentially unsupported: ${unsupported.map((d) => d.diagnosis_code).join(", ")}.`);
+  if (unsupported.length > 0) {
+    indicators.push({ signal: "Potentially Unsupported Diagnosis Codes", explanation: `${unsupported.length} reported diagnosis code(s) flagged as potentially unsupported: ${unsupported.map((d) => d.diagnosis_code).join(", ")}. These codes should be verified against the clinical documentation to confirm they are supported by the medical record.`, severity: "high" });
+  }
   const hccDx = diagnoses.filter((d) => d.is_hcc_mapped);
-  if (hccDx.length > 0) reasons.push(`${hccDx.length} HCC-mapped diagnosis code(s) present — HCC coding affects risk adjustment payments and is a common audit target.`);
-  return reasons;
+  if (hccDx.length > 0) {
+    indicators.push({ signal: "HCC-Mapped Diagnosis Codes Present", explanation: `${hccDx.length} HCC-mapped diagnosis code(s) reported. HCC coding directly affects Medicare Advantage risk adjustment payments and is a common audit focus area. Accuracy of HCC code documentation should be verified against clinical records.`, severity: "low" });
+  }
+  return indicators;
 }
 
 async function runQuery<T>(sql: string): Promise<T[]> {
   const res = await fetch("/api/bigquery", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
+    method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sql }),
   });
   if (!res.ok) throw new Error("Query failed");
-  const json = await res.json();
-  return json.data as T[];
-}
-
-// ── Risk Badge ────────────────────────────────────────────────────────────────
-
-function RiskBadge({ score }: { score: number }) {
-  const r = getRiskLabel(score);
-  return (
-    <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${r.bg}`}>
-      {r.label}
-    </span>
-  );
+  return (await res.json()).data as T[];
 }
 
 // ── Claim Row ─────────────────────────────────────────────────────────────────
 
-function ClaimRow({
-  claim,
-  selected,
-  onClick,
-}: {
-  claim: Claim;
-  selected: boolean;
-  onClick: () => void;
-}) {
-  const riskScore = getRiskScore(claim);
+function ClaimRow({ claim, selected, onClick }: { claim: Claim; selected: boolean; onClick: () => void }) {
+  const riskScore = getAuditRiskScore(claim);
+  const risk = getAuditRiskLevel(riskScore);
   const isAdjChain = claim.chain_root_id !== claim.claim_id;
-  const rowBg = claim.has_overpayment
-    ? "bg-red-950/20"
-    : claim.is_denied
-    ? "bg-orange-950/10"
-    : isAdjChain
-    ? "bg-blue-950/10"
+
+  const rowBg = claim.has_overpayment ? "bg-red-950/20"
+    : claim.is_denied ? "bg-orange-950/10"
+    : isAdjChain ? "bg-blue-950/10"
     : "";
 
   return (
-    <tr
-      className={`cursor-pointer border-b border-slate-800/40 transition-colors hover:bg-slate-800/30 ${rowBg} ${selected ? "ring-1 ring-inset ring-blue-500" : ""}`}
-      onClick={onClick}
-    >
+    <tr className={`cursor-pointer border-b border-slate-800/40 transition-colors hover:bg-slate-800/30 ${rowBg} ${selected ? "ring-1 ring-inset ring-blue-500" : ""}`} onClick={onClick}>
       <td className="py-2 pr-3">
         <div className="flex flex-col">
           <span className="font-mono text-xs font-medium text-blue-300">{claim.claim_id}</span>
-          {isAdjChain && (
-            <span className="text-[10px] text-blue-500">↳ adj of {claim.chain_root_id}</span>
-          )}
+          {isAdjChain && <span className="text-[10px] text-blue-500">↳ revision of {claim.chain_root_id}</span>}
         </div>
       </td>
       <td className="py-2 pr-3 text-xs text-slate-300">{claim.claim_type}</td>
       <td className="py-2 pr-3">
-        <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${STATUS_STYLES[claim.claim_status] ?? "text-slate-400"}`}>
-          {claim.claim_status}
-        </span>
+        <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${STATUS_STYLES[claim.claim_status] ?? "text-slate-400"}`}>{claim.claim_status}</span>
       </td>
       <td className="py-2 pr-3 text-xs text-slate-300">{fmtDate(claim.claim_from_date)}</td>
       <td className="py-2 pr-3 text-right text-xs font-semibold text-white">{fmt$(claim.payment_amount)}</td>
-      <td className="py-2 pr-3 text-right text-xs font-semibold text-red-300">
-        {claim.has_overpayment ? fmt$(claim.overpayment_amount) : "—"}
-      </td>
-      <td className="py-2 pr-3 text-xs" style={{ color: RISK_COLORS[claim.provider_risk_profile] }}>
-        {claim.provider_risk_profile.replace(/_/g, " ")}
-      </td>
+      <td className="py-2 pr-3 text-right text-xs font-semibold text-red-300">{claim.has_overpayment ? fmt$(claim.overpayment_amount) : "—"}</td>
+      <td className="py-2 pr-3 text-xs font-medium" style={{ color: RISK_COLORS[claim.provider_risk_profile] }}>{claim.provider_risk_profile.replace(/_/g, " ")}</td>
       <td className="py-2 pr-3">
-        <RiskBadge score={riskScore} />
+        <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${risk.bg}`}>{risk.label.split(" ")[0]}</span>
       </td>
       <td className="py-2 text-xs text-slate-500">
         <div className="flex gap-1">
-          {claim.has_overpayment && <span title="Overpayment" className="text-red-400">●</span>}
-          {claim.is_denied && <span title="Denied" className="text-orange-400">●</span>}
-          {isAdjChain && <span title="Adjustment" className="text-blue-400">●</span>}
-          {["Suspicious", "Outlier"].includes(claim.provider_risk_profile) && <span title="Risky Provider" className="text-yellow-400">●</span>}
+          {claim.has_overpayment && <span title="Potential Overpayment Signal" className="text-red-400">●</span>}
+          {claim.is_denied && <span title="Denied During Adjudication" className="text-orange-400">●</span>}
+          {isAdjChain && <span title="Claim Revision History" className="text-blue-400">●</span>}
+          {["Suspicious", "Outlier"].includes(claim.provider_risk_profile) && <span title="Elevated Billing Risk Provider" className="text-yellow-400">●</span>}
         </div>
       </td>
     </tr>
   );
 }
 
-// ── Detail Panel ──────────────────────────────────────────────────────────────
+// ── Claim Detail Panel ────────────────────────────────────────────────────────
 
-function ClaimDetail({
-  claim,
-  diagnoses,
-  adjChain,
-  loadingDetail,
-}: {
-  claim: Claim;
-  diagnoses: Diagnosis[];
-  adjChain: AdjChain[];
-  loadingDetail: boolean;
+function ClaimDetail({ claim, diagnoses, adjChain, loadingDetail }: {
+  claim: Claim; diagnoses: Diagnosis[]; adjChain: AdjChain[]; loadingDetail: boolean;
 }) {
-  const riskScore = getRiskScore(claim);
-  const risk = getRiskLabel(riskScore);
-  const reasons = buildWhyRisky(claim, diagnoses);
+  const riskScore = getAuditRiskScore(claim);
+  const risk = getAuditRiskLevel(riskScore);
+  const indicators = buildAuditReviewIndicators(claim, diagnoses);
   const isAdjChain = claim.chain_root_id !== claim.claim_id;
+  const highIndicators = indicators.filter((i) => i.severity === "high");
+  const medIndicators = indicators.filter((i) => i.severity === "medium");
+  const lowIndicators = indicators.filter((i) => i.severity === "low");
 
   return (
     <div className="space-y-4">
@@ -256,30 +235,31 @@ function ClaimDetail({
       <div className="flex items-start justify-between">
         <div>
           <p className="font-mono text-sm font-bold text-blue-300">{claim.claim_id}</p>
-          <p className="text-xs text-slate-400">{claim.provider_id} · {claim.claim_type}</p>
+          <p className="text-xs text-slate-400">{claim.provider_id} · {claim.claim_type} · {fmtDate(claim.claim_from_date)}</p>
         </div>
         <div className="flex gap-2">
-          <span className={`rounded border px-2 py-0.5 text-[10px] font-semibold ${STATUS_STYLES[claim.claim_status] ?? ""}`}>
-            {claim.claim_status}
-          </span>
-          <RiskBadge score={riskScore} />
+          <span className={`rounded border px-2 py-0.5 text-[10px] font-semibold ${STATUS_STYLES[claim.claim_status] ?? ""}`}>{claim.claim_status}</span>
+          <span className={`rounded border px-2 py-0.5 text-[10px] font-semibold ${risk.bg}`}>{risk.label}</span>
         </div>
       </div>
 
-      {/* Why Risky */}
-      {reasons.length > 0 && (
+      {/* Audit Review Indicators */}
+      {indicators.length > 0 && (
         <div className="rounded-lg border border-amber-800/40 bg-amber-950/20 p-3">
           <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-amber-400">
-            ⚠ Why This Claim Appears Risky
+            ⚠ Audit Review Indicators ({indicators.length})
           </p>
-          <ul className="space-y-1">
-            {reasons.map((r, i) => (
-              <li key={i} className="flex gap-1.5 text-[10px] leading-relaxed text-amber-100/80">
-                <span className="mt-0.5 shrink-0 text-amber-500">›</span>
-                {r}
-              </li>
+          <div className="space-y-2">
+            {[...highIndicators, ...medIndicators, ...lowIndicators].map((ind, i) => (
+              <div key={i} className={`rounded border p-2 ${ind.severity === "high" ? "border-red-700/40 bg-red-950/20" : ind.severity === "medium" ? "border-orange-700/40 bg-orange-950/10" : "border-slate-700/40 bg-slate-800/20"}`}>
+                <p className={`text-[10px] font-semibold mb-0.5 ${ind.severity === "high" ? "text-red-300" : ind.severity === "medium" ? "text-orange-300" : "text-slate-400"}`}>
+                  {ind.severity === "high" ? "▲ " : ind.severity === "medium" ? "● " : "○ "}{ind.signal}
+                </p>
+                <p className="text-[10px] leading-relaxed text-slate-400">{ind.explanation}</p>
+              </div>
             ))}
-          </ul>
+          </div>
+          <p className="mt-2 text-[9px] text-amber-700">These indicators represent elevated review priority signals — not confirmed billing errors. Clinical and operational review is required before any recovery determination.</p>
         </div>
       )}
 
@@ -288,14 +268,14 @@ function ClaimDetail({
         <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Payment Details</p>
         <div className="grid grid-cols-2 gap-2">
           {[
-            { label: "Payment Amount", value: fmt$(claim.payment_amount), warn: claim.payment_amount > 10000 },
-            { label: "Overpayment", value: claim.has_overpayment ? fmt$(claim.overpayment_amount) : "None", warn: claim.has_overpayment },
+            { label: "Billed & Paid Amount", value: fmt$(claim.payment_amount), warn: claim.payment_amount > 10000 },
+            { label: "Potential Overpayment", value: claim.has_overpayment ? fmt$(claim.overpayment_amount) : "None identified", warn: claim.has_overpayment },
             { label: "Service From", value: fmtDate(claim.claim_from_date) },
-            { label: "Service Thru", value: fmtDate(claim.claim_thru_date) },
-            { label: "Span Days", value: claim.claim_span_days?.toString() ?? "—" },
-            { label: "Length of Stay", value: claim.length_of_stay ? `${claim.length_of_stay}d` : "—" },
+            { label: "Service Through", value: fmtDate(claim.claim_thru_date) },
+            { label: "Claim Span (Days)", value: claim.claim_span_days?.toString() ?? "—" },
+            { label: "Length of Stay", value: claim.length_of_stay ? `${claim.length_of_stay} days` : "—" },
             { label: "DRG Code", value: claim.drg_code ?? "—" },
-            { label: "Denial Code", value: claim.denial_reason_code ?? "—", warn: !!claim.denial_reason_code },
+            { label: "Denial Reason Code", value: claim.denial_reason_code ?? "None", warn: !!claim.denial_reason_code },
           ].map((m) => (
             <div key={m.label} className="rounded bg-slate-800/50 p-2">
               <p className="text-[9px] text-slate-500">{m.label}</p>
@@ -305,15 +285,15 @@ function ClaimDetail({
         </div>
       </div>
 
-      {/* Provider */}
+      {/* Billing Provider Information */}
       <div>
-        <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Provider</p>
+        <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Billing Provider Information</p>
         <div className="grid grid-cols-2 gap-2">
           {[
             { label: "Provider ID", value: claim.provider_id },
-            { label: "Type", value: claim.provider_type },
-            { label: "Peer Group", value: claim.peer_group.replace(/_/g, " ") },
-            { label: "Risk Profile", value: claim.provider_risk_profile.replace(/_/g, " "), warn: ["Suspicious", "Outlier"].includes(claim.provider_risk_profile) },
+            { label: "Provider Type", value: claim.provider_type },
+            { label: "Peer Group", value: claim.peer_group?.replace(/_/g, " ") },
+            { label: "Risk Profile", value: claim.provider_risk_profile?.replace(/_/g, " "), warn: ["Suspicious", "Outlier"].includes(claim.provider_risk_profile) },
             { label: "Region", value: claim.provider_region },
           ].map((m) => (
             <div key={m.label} className="rounded bg-slate-800/50 p-2">
@@ -324,18 +304,18 @@ function ClaimDetail({
         </div>
       </div>
 
-      {/* Patient */}
+      {/* Patient Profile */}
       <div>
-        <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Patient</p>
+        <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Patient Profile</p>
         <div className="grid grid-cols-2 gap-2">
           {[
             { label: "Patient ID", value: claim.patient_id },
-            { label: "Age Bucket", value: claim.patient_age_bucket },
+            { label: "Age Group", value: claim.patient_age_bucket },
             { label: "Risk Score", value: claim.patient_risk_score?.toFixed(3) ?? "—", warn: claim.patient_risk_score > 2 },
             { label: "Chronic Conditions", value: claim.patient_chronic_count?.toString() ?? "—" },
-            { label: "Cost Bucket", value: claim.patient_cost_bucket?.replace(/_/g, " ") ?? "—" },
-            { label: "Dual Status", value: claim.patient_dual_status ?? "—" },
-            { label: "Utilization", value: claim.patient_utilization_segment ?? "—" },
+            { label: "Cost Tier", value: claim.patient_cost_bucket?.replace(/_/g, " ") ?? "—" },
+            { label: "Dual Eligibility Status", value: claim.patient_dual_status ?? "—" },
+            { label: "Utilization Segment", value: claim.patient_utilization_segment ?? "—" },
           ].map((m) => (
             <div key={m.label} className="rounded bg-slate-800/50 p-2">
               <p className="text-[9px] text-slate-500">{m.label}</p>
@@ -345,63 +325,47 @@ function ClaimDetail({
         </div>
       </div>
 
-      {/* Diagnoses */}
+      {/* Reported Diagnosis Codes */}
       {loadingDetail ? (
-        <p className="text-xs text-slate-500">Loading diagnoses...</p>
-      ) : diagnoses.length > 0 ? (
+        <p className="text-xs text-slate-500">Loading diagnosis codes...</p>
+      ) : diagnoses.length > 0 && (
         <div>
-          <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-            Diagnoses ({diagnoses.length})
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+            Reported Diagnosis Codes ({diagnoses.length})
           </p>
+          <p className="mb-2 text-[10px] text-slate-500">Verify each code against clinical documentation to confirm support in the medical record.</p>
           <div className="space-y-1.5">
-            {diagnoses
-              .sort((a, b) => a.diagnosis_sequence - b.diagnosis_sequence)
-              .map((dx) => (
-                <div
-                  key={dx.diagnosis_code + dx.diagnosis_sequence}
-                  className={`rounded border p-2 text-[10px] ${
-                    dx.is_suspected_unsupported
-                      ? "border-red-700/50 bg-red-950/20"
-                      : dx.is_hcc_mapped
-                      ? "border-purple-700/50 bg-purple-950/20"
-                      : dx.is_principal_dx
-                      ? "border-blue-700/50 bg-blue-950/20"
-                      : "border-slate-700/40 bg-slate-800/30"
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono font-semibold text-white">{dx.diagnosis_code}</span>
-                    <div className="flex gap-1">
-                      {dx.is_principal_dx && <span className="rounded bg-blue-900/60 px-1 text-[9px] text-blue-300">Principal</span>}
-                      {dx.is_hcc_mapped && <span className="rounded bg-purple-900/60 px-1 text-[9px] text-purple-300">HCC {dx.hcc_weight != null ? `w=${dx.hcc_weight.toFixed(2)}` : ""}</span>}
-                      {dx.is_chronic && <span className="rounded bg-yellow-900/60 px-1 text-[9px] text-yellow-300">Chronic</span>}
-                      {dx.is_suspected_unsupported && <span className="rounded bg-red-900/60 px-1 text-[9px] text-red-300">⚠ Unsupported</span>}
-                    </div>
+            {diagnoses.sort((a, b) => a.diagnosis_sequence - b.diagnosis_sequence).map((dx) => (
+              <div key={dx.diagnosis_code + dx.diagnosis_sequence}
+                className={`rounded border p-2 text-[10px] ${dx.is_suspected_unsupported ? "border-red-700/50 bg-red-950/20" : dx.is_hcc_mapped ? "border-purple-700/50 bg-purple-950/20" : dx.is_principal_dx ? "border-blue-700/50 bg-blue-950/20" : "border-slate-700/40 bg-slate-800/30"}`}>
+                <div className="flex items-center justify-between">
+                  <span className="font-mono font-semibold text-white">{dx.diagnosis_code}</span>
+                  <div className="flex gap-1">
+                    {dx.is_principal_dx && <span className="rounded bg-blue-900/60 px-1 text-[9px] text-blue-300">Principal</span>}
+                    {dx.is_hcc_mapped && <span className="rounded bg-purple-900/60 px-1 text-[9px] text-purple-300">HCC {dx.hcc_weight != null ? `w=${dx.hcc_weight.toFixed(2)}` : ""}</span>}
+                    {dx.is_chronic && <span className="rounded bg-yellow-900/60 px-1 text-[9px] text-yellow-300">Chronic</span>}
+                    {dx.is_suspected_unsupported && <span className="rounded bg-red-900/60 px-1 text-[9px] text-red-300">⚠ Review Required</span>}
                   </div>
-                  <p className="mt-0.5 text-slate-400">{dx.diagnosis_description}</p>
-                  <p className="mt-0.5 text-slate-500">{dx.body_system}{dx.present_on_admission ? ` · POA: ${dx.present_on_admission}` : ""}</p>
                 </div>
-              ))}
+                <p className="mt-0.5 text-slate-400">{dx.diagnosis_description}</p>
+                <p className="mt-0.5 text-slate-500">{dx.body_system}{dx.present_on_admission ? ` · Present on Admission: ${dx.present_on_admission}` : ""}</p>
+              </div>
+            ))}
           </div>
         </div>
-      ) : null}
+      )}
 
-      {/* Adjustment Chain */}
+      {/* Claim Adjustment & Revision History */}
       {(isAdjChain || adjChain.length > 1) && (
         <div>
-          <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-            Adjustment Chain ({adjChain.length} claims)
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+            Claim Adjustment &amp; Revision History ({adjChain.length} records)
           </p>
+          <p className="mb-2 text-[10px] text-slate-500">Repeated adjustments on a claim may indicate billing corrections, documentation updates, or retroactive payment changes.</p>
           <div className="space-y-1.5">
-            {adjChain.map((ac, i) => (
-              <div
-                key={ac.claim_id}
-                className={`flex items-center justify-between rounded border p-2 text-[10px] ${
-                  ac.claim_id === claim.claim_id
-                    ? "border-blue-600/60 bg-blue-950/30"
-                    : "border-slate-700/40 bg-slate-800/30"
-                }`}
-              >
+            {adjChain.map((ac) => (
+              <div key={ac.claim_id}
+                className={`flex items-center justify-between rounded border p-2 text-[10px] ${ac.claim_id === claim.claim_id ? "border-blue-600/60 bg-blue-950/30" : "border-slate-700/40 bg-slate-800/30"}`}>
                 <div>
                   <span className="font-mono text-white">{ac.claim_id}</span>
                   <span className="ml-2 text-slate-500">{ADJ_TYPE_LABELS[ac.adjustment_type] ?? ac.adjustment_type}</span>
@@ -424,15 +388,12 @@ function ClaimDetail({
 
 export default function ClaimsExplorerPage() {
   const searchParams = useSearchParams();
-
-  // State
   const [claims, setClaims] = useState<Claim[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(0);
 
-  // Filters
   const [providerFilter, setProviderFilter] = useState(searchParams.get("provider") ?? "");
   const [riskFilter, setRiskFilter] = useState(searchParams.get("risk") ?? "All");
   const [statusFilter, setStatusFilter] = useState("All");
@@ -440,21 +401,17 @@ export default function ClaimsExplorerPage() {
   const [overpaymentOnly, setOverpaymentOnly] = useState(false);
   const [deniedOnly, setDeniedOnly] = useState(false);
   const [adjOnly, setAdjOnly] = useState(false);
-  const [suspiciousProviderOnly, setSuspiciousProviderOnly] = useState(
-    searchParams.get("suspicious") === "true"
-  );
+  const [suspiciousProviderOnly, setSuspiciousProviderOnly] = useState(searchParams.get("suspicious") === "true");
   const [minAmount, setMinAmount] = useState("");
   const [maxAmount, setMaxAmount] = useState("");
   const [sortCol, setSortCol] = useState("payment_amount");
   const [sortDir, setSortDir] = useState<"DESC" | "ASC">("DESC");
 
-  // Detail
   const [selectedClaim, setSelectedClaim] = useState<Claim | null>(null);
   const [diagnoses, setDiagnoses] = useState<Diagnosis[]>([]);
   const [adjChain, setAdjChain] = useState<AdjChain[]>([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
 
-  // Build WHERE clause
   const whereClause = useMemo(() => {
     const parts: string[] = [];
     if (providerFilter) parts.push(`provider_id = '${providerFilter.toUpperCase()}'`);
@@ -470,10 +427,8 @@ export default function ClaimsExplorerPage() {
     return parts.length > 0 ? `WHERE ${parts.join(" AND ")}` : "";
   }, [providerFilter, riskFilter, statusFilter, claimTypeFilter, overpaymentOnly, deniedOnly, adjOnly, suspiciousProviderOnly, minAmount, maxAmount]);
 
-  // Fetch claims
   const fetchClaims = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+    setLoading(true); setError(null);
     try {
       const offset = page * PAGE_SIZE;
       const [claimsRows, countRows] = await Promise.all([
@@ -501,241 +456,175 @@ export default function ClaimsExplorerPage() {
       ]);
       setClaims(claimsRows);
       setTotalCount(countRows[0]?.cnt ?? 0);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
-    }
+    } catch (e) { setError(String(e)); }
+    finally { setLoading(false); }
   }, [whereClause, page, sortCol, sortDir]);
 
   useEffect(() => { fetchClaims(); }, [fetchClaims]);
 
-  // Load detail when claim selected
   useEffect(() => {
     if (!selectedClaim) return;
-    setLoadingDetail(true);
-    setDiagnoses([]);
-    setAdjChain([]);
+    setLoadingDetail(true); setDiagnoses([]); setAdjChain([]);
     Promise.all([
-      runQuery<Diagnosis>(`
-        SELECT * FROM \`cms-extrapolation-v1.curated_cms_claims.fact_diagnoses\`
-        WHERE claim_id = '${selectedClaim.claim_id}'
-        ORDER BY diagnosis_sequence
-      `),
-      runQuery<AdjChain>(`
-        SELECT claim_id, claim_status, adjustment_type, payment_amount,
-          overpayment_amount, has_overpayment, claim_from_date
-        FROM \`cms-extrapolation-v1.curated_cms_claims.fact_part_a_claims\`
-        WHERE chain_root_id = '${selectedClaim.chain_root_id}'
-        ORDER BY claim_id
-      `),
-    ]).then(([dx, chain]) => {
-      setDiagnoses(dx);
-      setAdjChain(chain);
-    }).finally(() => setLoadingDetail(false));
+      runQuery<Diagnosis>(`SELECT * FROM \`cms-extrapolation-v1.curated_cms_claims.fact_diagnoses\` WHERE claim_id = '${selectedClaim.claim_id}' ORDER BY diagnosis_sequence`),
+      runQuery<AdjChain>(`SELECT claim_id, claim_status, adjustment_type, payment_amount, overpayment_amount, has_overpayment, claim_from_date FROM \`cms-extrapolation-v1.curated_cms_claims.fact_part_a_claims\` WHERE chain_root_id = '${selectedClaim.chain_root_id}' ORDER BY claim_id`),
+    ]).then(([dx, chain]) => { setDiagnoses(dx); setAdjChain(chain); }).finally(() => setLoadingDetail(false));
   }, [selectedClaim]);
 
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
 
   function toggleSort(col: string) {
-    if (sortCol === col) setSortDir((d) => (d === "DESC" ? "ASC" : "DESC"));
+    if (sortCol === col) setSortDir((d) => d === "DESC" ? "ASC" : "DESC");
     else { setSortCol(col); setSortDir("DESC"); }
     setPage(0);
   }
 
   function SortHeader({ col, label }: { col: string; label: string }) {
-    const active = sortCol === col;
     return (
-      <th
-        className="cursor-pointer pb-2 pr-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-400 hover:text-white"
-        onClick={() => toggleSort(col)}
-      >
-        {label} {active ? (sortDir === "DESC" ? "↓" : "↑") : ""}
+      <th className="cursor-pointer pb-2 pr-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-400 hover:text-white" onClick={() => toggleSort(col)}>
+        {label} {sortCol === col ? (sortDir === "DESC" ? "↓" : "↑") : ""}
       </th>
     );
   }
 
   return (
     <main className="min-h-screen bg-slate-950 px-6 py-8 text-white">
+
       {/* Header */}
       <div className="mb-6">
-        <p className="mb-1 text-xs font-semibold uppercase tracking-widest text-blue-400">
-          CMS Post-Payment Analytics
-        </p>
+        <p className="mb-1 text-xs font-semibold uppercase tracking-widest text-blue-400">CMS Post-Payment Analytics</p>
         <h1 className="text-3xl font-bold tracking-tight text-white">Claims Explorer</h1>
         <p className="mt-1 text-sm text-slate-400">
-          Investigative claim review · drill into billing behavior · audit evidence
+          Claim-level audit investigation · billing review · documentation assessment
+        </p>
+      </div>
+
+      {/* Context Banner */}
+      <div className="mb-6 rounded-xl border border-slate-700/40 bg-slate-900/50 px-4 py-3">
+        <p className="text-xs leading-relaxed text-slate-400">
+          <span className="font-semibold text-slate-300">Audit investigation workflow:</span> This interface is the operational evidence layer of the audit analytics platform. Use it to drill from provider-level risk signals into individual claim evidence — verifying specific billing patterns, tracing adjustment histories, reviewing reported diagnosis codes, and evaluating the documentation basis for high-dollar or flagged claims.{" "}
+          <span className="text-slate-500">Filters on the left allow targeted claim review by provider, risk profile, claim status, and audit signal type. Click any claim to open the full Claim Review Summary.</span>
         </p>
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
-        {/* ── Filters Panel ── */}
+
+        {/* Filters Panel */}
         <div className="lg:col-span-1">
           <div className="rounded-xl border border-slate-700/60 bg-slate-900/80 p-4">
-            <h2 className="mb-4 text-xs font-semibold uppercase tracking-widest text-slate-400">
-              Filters
-            </h2>
+            <h2 className="mb-4 text-xs font-semibold uppercase tracking-widest text-slate-400">Review Filters</h2>
 
-            {/* Provider */}
             <div className="mb-4">
               <label className="mb-1 block text-[10px] font-semibold text-slate-400">Provider ID</label>
-              <input
-                type="text"
-                value={providerFilter}
+              <input type="text" value={providerFilter}
                 onChange={(e) => { setProviderFilter(e.target.value.toUpperCase()); setPage(0); }}
                 placeholder="e.g. PRV000579"
-                className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs text-white placeholder-slate-600 focus:border-blue-500 focus:outline-none"
-              />
+                className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs text-white placeholder-slate-600 focus:border-blue-500 focus:outline-none" />
             </div>
 
-            {/* Risk Profile */}
             <div className="mb-4">
               <label className="mb-1 block text-[10px] font-semibold text-slate-400">Provider Risk Profile</label>
               <div className="flex flex-wrap gap-1">
                 {["All", "Normal", "High_Volume", "Emerging", "Suspicious", "Outlier"].map((r) => (
-                  <button
-                    key={r}
-                    onClick={() => { setRiskFilter(r); setPage(0); }}
-                    className={`rounded border px-2 py-0.5 text-[10px] font-medium transition-all ${
-                      riskFilter === r
-                        ? "border-blue-500 bg-blue-500/10 text-blue-300"
-                        : "border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600"
-                    }`}
-                  >
+                  <button key={r} onClick={() => { setRiskFilter(r); setPage(0); }}
+                    className={`rounded border px-2 py-0.5 text-[10px] font-medium transition-all ${riskFilter === r ? "border-blue-500 bg-blue-500/10 text-blue-300" : "border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600"}`}>
                     {r.replace(/_/g, " ")}
                   </button>
                 ))}
               </div>
             </div>
 
-            {/* Claim Status */}
             <div className="mb-4">
               <label className="mb-1 block text-[10px] font-semibold text-slate-400">Claim Status</label>
               <div className="flex flex-wrap gap-1">
                 {["All", "Paid", "Denied", "Adjusted", "Cancelled"].map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => { setStatusFilter(s); setPage(0); }}
-                    className={`rounded border px-2 py-0.5 text-[10px] font-medium transition-all ${
-                      statusFilter === s
-                        ? "border-blue-500 bg-blue-500/10 text-blue-300"
-                        : "border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600"
-                    }`}
-                  >
+                  <button key={s} onClick={() => { setStatusFilter(s); setPage(0); }}
+                    className={`rounded border px-2 py-0.5 text-[10px] font-medium transition-all ${statusFilter === s ? "border-blue-500 bg-blue-500/10 text-blue-300" : "border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600"}`}>
                     {s}
                   </button>
                 ))}
               </div>
             </div>
 
-            {/* Claim Type */}
             <div className="mb-4">
               <label className="mb-1 block text-[10px] font-semibold text-slate-400">Claim Type</label>
               <div className="flex flex-wrap gap-1">
                 {["All", "Inpatient", "Outpatient", "Home Health", "SNF", "Hospice"].map((t) => (
-                  <button
-                    key={t}
-                    onClick={() => { setClaimTypeFilter(t); setPage(0); }}
-                    className={`rounded border px-2 py-0.5 text-[10px] font-medium transition-all ${
-                      claimTypeFilter === t
-                        ? "border-blue-500 bg-blue-500/10 text-blue-300"
-                        : "border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600"
-                    }`}
-                  >
+                  <button key={t} onClick={() => { setClaimTypeFilter(t); setPage(0); }}
+                    className={`rounded border px-2 py-0.5 text-[10px] font-medium transition-all ${claimTypeFilter === t ? "border-blue-500 bg-blue-500/10 text-blue-300" : "border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600"}`}>
                     {t}
                   </button>
                 ))}
               </div>
             </div>
 
-            {/* Quick Flags */}
             <div className="mb-4">
-              <label className="mb-2 block text-[10px] font-semibold text-slate-400">Quick Filters</label>
+              <label className="mb-2 block text-[10px] font-semibold text-slate-400">Audit Review Filters</label>
               <div className="space-y-2">
                 {[
-                  { label: "Overpayment only", state: overpaymentOnly, set: setOverpaymentOnly },
-                  { label: "Denied claims only", state: deniedOnly, set: setDeniedOnly },
-                  { label: "Adjustments / Cancellations", state: adjOnly, set: setAdjOnly },
-                  { label: "Suspicious / Outlier providers", state: suspiciousProviderOnly, set: setSuspiciousProviderOnly },
+                  { label: "Potential overpayment signal only", state: overpaymentOnly, set: setOverpaymentOnly },
+                  { label: "Denied during adjudication only", state: deniedOnly, set: setDeniedOnly },
+                  { label: "Adjusted or cancelled claims only", state: adjOnly, set: setAdjOnly },
+                  { label: "Elevated risk providers only", state: suspiciousProviderOnly, set: setSuspiciousProviderOnly },
                 ].map((f) => (
                   <label key={f.label} className="flex cursor-pointer items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={f.state}
+                    <input type="checkbox" checked={f.state}
                       onChange={(e) => { f.set(e.target.checked); setPage(0); }}
-                      className="rounded border-slate-600 bg-slate-800 text-blue-500"
-                    />
+                      className="rounded border-slate-600 bg-slate-800 text-blue-500" />
                     <span className="text-[10px] text-slate-300">{f.label}</span>
                   </label>
                 ))}
               </div>
             </div>
 
-            {/* Amount Range */}
             <div className="mb-4">
-              <label className="mb-1 block text-[10px] font-semibold text-slate-400">Payment Amount Range</label>
+              <label className="mb-1 block text-[10px] font-semibold text-slate-400">Billed Amount Range</label>
               <div className="flex gap-2">
-                <input
-                  type="number"
-                  value={minAmount}
+                <input type="number" value={minAmount}
                   onChange={(e) => { setMinAmount(e.target.value); setPage(0); }}
                   placeholder="Min $"
-                  className="w-full rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs text-white placeholder-slate-600 focus:border-blue-500 focus:outline-none"
-                />
-                <input
-                  type="number"
-                  value={maxAmount}
+                  className="w-full rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs text-white placeholder-slate-600 focus:border-blue-500 focus:outline-none" />
+                <input type="number" value={maxAmount}
                   onChange={(e) => { setMaxAmount(e.target.value); setPage(0); }}
                   placeholder="Max $"
-                  className="w-full rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs text-white placeholder-slate-600 focus:border-blue-500 focus:outline-none"
-                />
+                  className="w-full rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs text-white placeholder-slate-600 focus:border-blue-500 focus:outline-none" />
               </div>
             </div>
 
-            {/* Legend */}
+            {/* Row highlight legend */}
             <div className="mt-4 rounded-lg border border-slate-700/40 bg-slate-800/30 p-3">
               <p className="mb-2 text-[10px] font-semibold text-slate-400">Row Highlights</p>
               <div className="space-y-1 text-[10px] text-slate-400">
-                <div className="flex items-center gap-2"><span className="h-2 w-3 rounded bg-red-950/60" /> Overpayment detected</div>
-                <div className="flex items-center gap-2"><span className="h-2 w-3 rounded bg-orange-950/40" /> Denied claim</div>
-                <div className="flex items-center gap-2"><span className="h-2 w-3 rounded bg-blue-950/40" /> Adjustment chain</div>
+                <div className="flex items-center gap-2"><span className="h-2 w-3 rounded bg-red-950/60" /> Potential overpayment signal</div>
+                <div className="flex items-center gap-2"><span className="h-2 w-3 rounded bg-orange-950/40" /> Denied during adjudication</div>
+                <div className="flex items-center gap-2"><span className="h-2 w-3 rounded bg-blue-950/40" /> Claim revision history</div>
               </div>
             </div>
           </div>
         </div>
 
-        {/* ── Claims Table + Detail ── */}
+        {/* Main Content */}
         <div className="space-y-5 lg:col-span-3">
-          {/* Results summary */}
+
+          {/* Results bar */}
           <div className="flex items-center justify-between">
             <p className="text-xs text-slate-400">
               {loading ? "Loading..." : `${totalCount.toLocaleString()} claims matching filters · page ${page + 1} of ${totalPages || 1}`}
             </p>
             <div className="flex gap-2">
-              <button
-                onClick={() => setPage((p) => Math.max(0, p - 1))}
-                disabled={page === 0 || loading}
-                className="rounded border border-slate-700 px-3 py-1 text-xs text-slate-400 hover:border-slate-500 disabled:opacity-30"
-              >
-                ← Prev
-              </button>
-              <button
-                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-                disabled={page >= totalPages - 1 || loading}
-                className="rounded border border-slate-700 px-3 py-1 text-xs text-slate-400 hover:border-slate-500 disabled:opacity-30"
-              >
-                Next →
-              </button>
+              <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0 || loading}
+                className="rounded border border-slate-700 px-3 py-1 text-xs text-slate-400 hover:border-slate-500 disabled:opacity-30">← Prev</button>
+              <button onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1 || loading}
+                className="rounded border border-slate-700 px-3 py-1 text-xs text-slate-400 hover:border-slate-500 disabled:opacity-30">Next →</button>
             </div>
           </div>
 
-          {error && (
-            <div className="rounded-xl border border-red-800 bg-red-950/40 p-4 text-xs text-red-300">{error}</div>
-          )}
+          {error && <div className="rounded-xl border border-red-800 bg-red-950/40 p-4 text-xs text-red-300">{error}</div>}
 
           {/* Table + Detail split */}
           <div className={`grid gap-5 ${selectedClaim ? "grid-cols-1 xl:grid-cols-2" : "grid-cols-1"}`}>
-            {/* Table */}
+
+            {/* Claims Table */}
             <div className="rounded-xl border border-slate-700/60 bg-slate-900/80 p-4">
               {loading ? (
                 <div className="flex h-40 items-center justify-center">
@@ -749,79 +638,49 @@ export default function ClaimsExplorerPage() {
                         <SortHeader col="claim_id" label="Claim ID" />
                         <th className="pb-2 pr-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-400">Type</th>
                         <th className="pb-2 pr-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-400">Status</th>
-                        <SortHeader col="claim_from_date" label="Date" />
-                        <SortHeader col="payment_amount" label="Payment" />
-                        <SortHeader col="overpayment_amount" label="Overpmt" />
-                        <th className="pb-2 pr-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-400">Risk Profile</th>
-                        <th className="pb-2 pr-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-400">Audit Risk</th>
+                        <SortHeader col="claim_from_date" label="Service Date" />
+                        <SortHeader col="payment_amount" label="Billed Amount" />
+                        <SortHeader col="overpayment_amount" label="Overpayment" />
+                        <th className="pb-2 pr-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-400">Provider Risk</th>
+                        <th className="pb-2 pr-3 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-400">Review Priority</th>
                         <th className="pb-2 text-left text-[10px] font-semibold uppercase tracking-wider text-slate-400">Signals</th>
                       </tr>
                     </thead>
                     <tbody>
                       {claims.map((c) => (
-                        <ClaimRow
-                          key={c.claim_id}
-                          claim={c}
-                          selected={selectedClaim?.claim_id === c.claim_id}
-                          onClick={() => setSelectedClaim(selectedClaim?.claim_id === c.claim_id ? null : c)}
-                        />
+                        <ClaimRow key={c.claim_id} claim={c} selected={selectedClaim?.claim_id === c.claim_id}
+                          onClick={() => setSelectedClaim(selectedClaim?.claim_id === c.claim_id ? null : c)} />
                       ))}
                     </tbody>
                   </table>
                   {claims.length === 0 && !loading && (
-                    <p className="py-8 text-center text-xs text-slate-500">No claims match the current filters.</p>
+                    <p className="py-8 text-center text-xs text-slate-500">No claims match the current review filters.</p>
                   )}
                 </div>
               )}
             </div>
 
-            {/* Detail Panel */}
+            {/* Claim Review Summary Panel */}
             {selectedClaim && (
-              <div className="rounded-xl border border-blue-700/40 bg-slate-900/80 p-4 xl:overflow-y-auto xl:max-h-[80vh]">
+              <div className="rounded-xl border border-blue-700/40 bg-slate-900/80 p-4 xl:max-h-[80vh] xl:overflow-y-auto">
                 <div className="mb-3 flex items-center justify-between">
-                  <p className="text-xs font-semibold text-blue-300">Claim Investigation</p>
-                  <button
-                    onClick={() => setSelectedClaim(null)}
-                    className="text-xs text-slate-500 hover:text-white"
-                  >
-                    ✕ Close
-                  </button>
+                  <p className="text-xs font-semibold text-blue-300">Claim Review Summary</p>
+                  <button onClick={() => setSelectedClaim(null)} className="text-xs text-slate-500 hover:text-white">✕ Close</button>
                 </div>
-                <ClaimDetail
-                  claim={selectedClaim}
-                  diagnoses={diagnoses}
-                  adjChain={adjChain}
-                  loadingDetail={loadingDetail}
-                />
+                <ClaimDetail claim={selectedClaim} diagnoses={diagnoses} adjChain={adjChain} loadingDetail={loadingDetail} />
               </div>
             )}
           </div>
 
-          {/* Pagination footer */}
+          {/* Pagination */}
           <div className="flex items-center justify-between text-xs text-slate-500">
             <span>Showing {Math.min(PAGE_SIZE, claims.length)} of {totalCount.toLocaleString()} claims</span>
             <div className="flex gap-2">
-              <button
-                onClick={() => setPage(0)}
-                disabled={page === 0}
-                className="rounded border border-slate-700 px-2 py-1 hover:border-slate-500 disabled:opacity-30"
-              >First</button>
-              <button
-                onClick={() => setPage((p) => Math.max(0, p - 1))}
-                disabled={page === 0}
-                className="rounded border border-slate-700 px-2 py-1 hover:border-slate-500 disabled:opacity-30"
-              >‹</button>
+              <button onClick={() => setPage(0)} disabled={page === 0} className="rounded border border-slate-700 px-2 py-1 hover:border-slate-500 disabled:opacity-30">First</button>
+              <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0} className="rounded border border-slate-700 px-2 py-1 hover:border-slate-500 disabled:opacity-30">‹</button>
               <span className="px-2 py-1">{page + 1} / {totalPages || 1}</span>
-              <button
-                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-                disabled={page >= totalPages - 1}
-                className="rounded border border-slate-700 px-2 py-1 hover:border-slate-500 disabled:opacity-30"
-              >›</button>
-              <button
-                onClick={() => setPage(totalPages - 1)}
-                disabled={page >= totalPages - 1}
-                className="rounded border border-slate-700 px-2 py-1 hover:border-slate-500 disabled:opacity-30"
-              >Last</button>
+              <button onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1} className="rounded border border-slate-700 px-2 py-1 hover:border-slate-500 disabled:opacity-30">›</button>
+              <button onClick={() => setPage(totalPages - 1)} disabled={page >= totalPages - 1} className="rounded border border-slate-700 px-2 py-1 hover:border-slate-500 disabled:opacity-30">Last</button>
             </div>
           </div>
         </div>
