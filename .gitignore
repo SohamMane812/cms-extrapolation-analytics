@@ -46,3 +46,5 @@ outputs/
 
 # Models
 models/trained_models/
+
+config/

@@ -8458,7 +8458,7 @@ a.anchor-link {
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [6]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [11]:</div>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
 <div class="highlight hl-ipython3"><pre><span></span><span class="c1"># ── CELL 6: Overpayment Rate Benchmarking ─────────────────────────────────────</span>
@@ -8515,12 +8515,14 @@ a.anchor-link {
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"    </span><span class="si">{</span><span class="n">profile</span><span class="si">:</span><span class="s2">&lt;20</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">fmt_pct</span><span class="p">(</span><span class="n">profile_op</span><span class="p">[</span><span class="n">profile</span><span class="p">])</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
 <span class="n">finding</span><span class="p">(</span>
-    <span class="s2">"Overpayment rates are elevated for Suspicious and Outlier providers "</span>
-    <span class="sa">f</span><span class="s2">"(</span><span class="si">{</span><span class="n">fmt_pct</span><span class="p">(</span><span class="n">profile_op</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'Suspicious'</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">))</span><span class="si">}</span><span class="s2"> and "</span>
-    <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">fmt_pct</span><span class="p">(</span><span class="n">profile_op</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'Outlier'</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">))</span><span class="si">}</span><span class="s2">) "</span>
-    <span class="sa">f</span><span class="s2">"compared to Normal providers (</span><span class="si">{</span><span class="n">fmt_pct</span><span class="p">(</span><span class="n">profile_op</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">'Normal'</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">))</span><span class="si">}</span><span class="s2">). "</span>
-    <span class="s2">"The top 30 providers by total overpayment are disproportionately "</span>
-    <span class="s2">"from high-risk profile categories."</span>
+    <span class="s2">"Overpayment rates are similar across risk profiles — Normal 8.0%, "</span>
+    <span class="s2">"Suspicious 7.8%, Outlier 7.6%. This reflects the uniform overpayment "</span>
+    <span class="s2">"injection rate in the data generation process. However, total overpayment "</span>
+    <span class="s2">"amount is still concentrated among Outlier and high-volume Suspicious "</span>
+    <span class="s2">"providers because they bill higher absolute payment amounts. "</span>
+    <span class="s2">"In audit practice, both rate and absolute dollars matter — a provider "</span>
+    <span class="s2">"with a moderate overpayment rate but very high total payments may represent "</span>
+    <span class="s2">"more recoverable overpayment than a high-rate, low-volume provider."</span>
 <span class="p">)</span>
 <span class="n">healthcare_context</span><span class="p">(</span>
     <span class="s2">"Overpayment rate is one of the most direct audit signals available. "</span>
@@ -8566,7 +8568,7 @@ a.anchor-link {
     Suspicious          : 7.8%
     Outlier             : 7.6%
 
-  📊 FINDING: Overpayment rates are elevated for Suspicious and Outlier providers (7.8% and 7.6%) compared to Normal providers (8.0%). The top 30 providers by total overpayment are disproportionately from high-risk profile categories.
+  📊 FINDING: Overpayment rates are similar across risk profiles — Normal 8.0%, Suspicious 7.8%, Outlier 7.6%. This reflects the uniform overpayment injection rate in the data generation process. However, total overpayment amount is still concentrated among Outlier and high-volume Suspicious providers because they bill higher absolute payment amounts. In audit practice, both rate and absolute dollars matter — a provider with a moderate overpayment rate but very high total payments may represent more recoverable overpayment than a high-rate, low-volume provider.
 
   🏥 CONTEXT: Overpayment rate is one of the most direct audit signals available. In real CMS post-payment review, the overpayment rate from a sample is the basis for extrapolation. A provider with a consistently high overpayment rate is a strong candidate for a comprehensive audit with universe-level extrapolation.
 </pre>
@@ -8912,6 +8914,21 @@ a.anchor-link {
   📊 FINDING: The heatmap confirms that anomaly signals are concentrated in specific peer group × risk profile combinations. Suspicious and Outlier providers show elevated anomaly scores across all peer groups, while Normal and High_Volume providers cluster near zero. This cross-dimensional view would help an audit team prioritize which peer group to target first.
 </pre>
 </div>
+</div>
+</div>
+</div>
+</div>
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=cd301284">
+<div class="jp-Cell-inputWrapper" tabindex="0">
+<div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
+</div>
+<div class="jp-InputArea jp-Cell-inputArea"><div class="jp-InputPrompt jp-InputArea-prompt">
+</div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
+<p>• Peer group average payment ranges are very narrow ($3.9K–$4.0K across
+groups) — peer groups differentiate more clearly on denial rate, volume,
+and suspicious behavior than on payment amount in the current generation
+logic. Production peer group definitions would incorporate specialty-level
+payment norms for stronger payment benchmarking.</p>
 </div>
 </div>
 </div>

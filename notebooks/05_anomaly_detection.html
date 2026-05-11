@@ -8755,7 +8755,7 @@ a.anchor-link {
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [17]:</div>
+<div class="jp-InputPrompt jp-InputArea-prompt">In [20]:</div>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
 <div class="highlight hl-ipython3"><pre><span></span><span class="c1"># ── CELL 8: Audit Prioritization Simulation ───────────────────────────────────</span>
@@ -8848,10 +8848,15 @@ a.anchor-link {
 
 <span class="n">finding</span><span class="p">(</span>
     <span class="sa">f</span><span class="s2">"By reviewing only 20% of providers using the anomaly score ranking, "</span>
-    <span class="sa">f</span><span class="s2">"auditors would find </span><span class="si">{</span><span class="n">pct_found_at_20_ranked</span><span class="si">:</span><span class="s2">.0f</span><span class="si">}</span><span class="s2">% of all anomalous providers "</span>
-    <span class="sa">f</span><span class="s2">"and recover </span><span class="si">{</span><span class="n">op_at_20_ranked</span><span class="si">:</span><span class="s2">.0f</span><span class="si">}</span><span class="s2">% of total overpayment — "</span>
-    <span class="sa">f</span><span class="s2">"compared to </span><span class="si">{</span><span class="n">pct_found_at_20_random</span><span class="si">:</span><span class="s2">.0f</span><span class="si">}</span><span class="s2">% and </span><span class="si">{</span><span class="n">op_at_20_random</span><span class="si">:</span><span class="s2">.0f</span><span class="si">}</span><span class="s2">% with random selection. "</span>
-    <span class="s2">"The anomaly score delivers meaningful efficiency gains in audit targeting."</span>
+    <span class="sa">f</span><span class="s2">"auditors would find 29% of all anomalous providers — a 2.2x improvement "</span>
+    <span class="sa">f</span><span class="s2">"over random selection at 13%. "</span>
+    <span class="sa">f</span><span class="s2">"However, overpayment dollar recovery at 20% reviewed is 19% versus 20% "</span>
+    <span class="sa">f</span><span class="s2">"for random, which is essentially equivalent. "</span>
+    <span class="sa">f</span><span class="s2">"This happens because overpayment was injected at a uniform rate across "</span>
+    <span class="sa">f</span><span class="s2">"providers rather than being concentrated in high-risk profiles. "</span>
+    <span class="sa">f</span><span class="s2">"In a real audit setting where fraud or unsupported billing is more "</span>
+    <span class="sa">f</span><span class="s2">"concentrated among high-risk providers, the score-guided overpayment "</span>
+    <span class="sa">f</span><span class="s2">"recovery advantage would likely be larger."</span>
 <span class="p">)</span>
 <span class="n">healthcare_context</span><span class="p">(</span>
     <span class="s2">"Audit efficiency is a core concern for CMS program integrity. "</span>
@@ -8890,7 +8895,7 @@ a.anchor-link {
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
 <div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
 <pre>
-  📊 FINDING: By reviewing only 20% of providers using the anomaly score ranking, auditors would find 29% of all anomalous providers and recover 19% of total overpayment — compared to 13% and 20% with random selection. The anomaly score delivers meaningful efficiency gains in audit targeting.
+  📊 FINDING: By reviewing only 20% of providers using the anomaly score ranking, auditors would find 29% of all anomalous providers — a 2.2x improvement over random selection at 13%. However, overpayment dollar recovery at 20% reviewed is 19% versus 20% for random, which is essentially equivalent. This happens because overpayment was injected at a uniform rate across providers rather than being concentrated in high-risk profiles. In a real audit setting where fraud or unsupported billing is more concentrated among high-risk providers, the score-guided overpayment recovery advantage would likely be larger.
 
   🏥 CONTEXT: Audit efficiency is a core concern for CMS program integrity. With limited auditor capacity, the ability to concentrate reviews on the highest-risk providers dramatically increases the return on audit investment. The cumulative detection curve is the primary tool for communicating this efficiency gain to program integrity leadership.
 </pre>
