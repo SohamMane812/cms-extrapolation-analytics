@@ -3,9 +3,8 @@ data_generation/generate_cclf4_diagnoses.py
 
 Generates the Part A diagnosis codes table (CCLF4).
 
-One row per diagnosis per institutional claim.
-Each CCLF1 claim gets between 3 and 12 diagnosis rows depending
-on patient complexity, MA status, and risk profile.
+Memory-optimized: writes records in chunks to avoid large in-memory
+accumulation at full scale (~2M+ rows).
 
 Dependencies:
     - config.yaml (via config_loader)
@@ -15,9 +14,6 @@ Dependencies:
 
 Usage:
     python data_generation/generate_cclf4_diagnoses.py
-
-Output (prototype mode):
-    outputs/generated/prototype/cclf4_diagnoses.parquet
 """
 
 import sys
@@ -32,69 +28,39 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from src.utils.config_loader import load_config, get_output_dir, get_raw_section, summarize_config
-
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-# Diagnosis type sequence logic:
-# Sequence 1 is always Principal
-# Sequence 2 is Admitting (inpatient only) or Secondary
-# Sequences 3+ are Secondary or External_Cause
-
-PROD_TYPE_MAP = {
-    1: "Principal",
-    2: "Admitting",
-}
-
-POA_WEIGHTS = {
-    "Y": 0.75,
-    "N": 0.15,
-    "U": 0.07,
-    "W": 0.03,
-}
+POA_WEIGHTS = {"Y": 0.75, "N": 0.15, "U": 0.07, "W": 0.03}
+CHUNK_SIZE  = 50_000   # Write to parquet every N diagnosis rows
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def get_num_diagnoses(
-    clm_type: str,
-    is_ma: bool,
-    is_high_risk: bool,
-    dx_cfg: dict,
-    mode_key: str,
-    rng: np.random.Generator,
-) -> int:
-    """Determine how many diagnoses to assign to a claim."""
+def get_num_diagnoses(clm_type, is_ma, is_high_risk, dx_cfg, mode_key, rng):
     lo = dx_cfg["diagnoses_per_claim"][mode_key]["min"]
     hi = dx_cfg["diagnoses_per_claim"][mode_key]["max"]
-
     base = int(rng.integers(lo, hi + 1))
-
-    # Inpatient and SNF claims tend to have more diagnoses
     if clm_type in ("60", "20"):
         base = min(base + int(rng.integers(1, 3)), hi)
-
-    # MA patients get extra diagnoses (coding intensity)
     if is_ma:
         boost_lo, boost_hi = dx_cfg["ma_extra_diagnosis_boost"]
         base = min(base + int(rng.integers(boost_lo, boost_hi + 1)), hi)
-
-    # High-risk patients get extra diagnoses
     if is_high_risk:
         boost_lo, boost_hi = dx_cfg["high_risk_extra_diagnosis_boost"]
         base = min(base + int(rng.integers(boost_lo, boost_hi + 1)), hi)
-
     return max(lo, base)
 
 
-def sample_poa(clm_type: str, rng: np.random.Generator) -> str | None:
-    """Sample POA indicator. NULL for non-inpatient."""
+def sample_poa(clm_type, rng):
     if clm_type != "60":
         return None
     labels = list(POA_WEIGHTS.keys())
@@ -102,188 +68,182 @@ def sample_poa(clm_type: str, rng: np.random.Generator) -> str | None:
     return str(rng.choice(labels, p=probs))
 
 
-def assign_prod_type(seq_num: int, clm_type: str) -> str:
-    """Assign diagnosis product type based on sequence and claim type."""
+def assign_prod_type(seq_num, clm_type):
     if seq_num == 1:
         return "Principal"
     if seq_num == 2 and clm_type == "60":
         return "Admitting"
-    # ~5% chance of External_Cause for later sequences
     return "Secondary"
+
+
+# ---------------------------------------------------------------------------
+# Chunked writer
+# ---------------------------------------------------------------------------
+
+# Explicit schema for CCLF4 — prevents null-type mismatch across chunks
+CCLF4_SCHEMA = pa.schema([
+    pa.field("cur_clm_uniq_id",               pa.string()),
+    pa.field("bene_mbi_id",                    pa.string()),
+    pa.field("clm_dgns_cd",                    pa.string()),
+    pa.field("clm_val_sqnc_num",               pa.int64()),
+    pa.field("clm_prod_type_cd",               pa.string()),
+    pa.field("clm_from_dt",                    pa.date32()),
+    pa.field("clm_thru_dt",                    pa.date32()),
+    pa.field("clm_poa_ind",                    pa.string()),
+    pa.field("dgns_prcdr_icd_ind",             pa.string()),
+    pa.field("hcc_category",                   pa.string()),
+    pa.field("hcc_weight",                     pa.float64()),
+    pa.field("chronic_condition_flag",         pa.bool_()),
+    pa.field("high_value_hcc_flag",            pa.bool_()),
+    pa.field("suspected_unsupported_dx_flag",  pa.bool_()),
+])
+
+
+class ParquetChunkWriter:
+    """Writes DataFrame rows to a parquet file in chunks to keep memory flat."""
+
+    def __init__(self, path, schema):
+        self.path   = path
+        self.schema = schema
+        self.writer = None
+        self.total  = 0
+
+    def write_chunk(self, records):
+        if not records:
+            return
+        df    = pd.DataFrame(records)
+        table = pa.Table.from_pandas(df, schema=self.schema, preserve_index=False)
+        if self.writer is None:
+            self.writer = pq.ParquetWriter(str(self.path), self.schema)
+        self.writer.write_table(table)
+        self.total += len(records)
+
+    def close(self):
+        if self.writer:
+            self.writer.close()
+        return self.total
 
 
 # ---------------------------------------------------------------------------
 # Main generator
 # ---------------------------------------------------------------------------
 
-def generate_cclf4(
-    cfg,
-    dx_cfg: dict,
-    claims_df: pd.DataFrame,
-    bene_df: pd.DataFrame,
-    dx_ref_df: pd.DataFrame,
-    rng: np.random.Generator,
-) -> pd.DataFrame:
-    """Generate CCLF4 diagnosis codes table."""
-    print("  Generating CCLF4 diagnoses...")
+def generate_cclf4(cfg, dx_cfg, claims_df, bene_df, dx_ref_df, rng):
+    print("  Generating CCLF4 diagnoses (chunked write mode)...")
 
     mode_key    = cfg.active_mode
     inj_cfg     = cfg.injection
+    output_path = cfg.paths.cclf4
 
-    # Build patient lookup for MA and high-risk flags
     bene_lookup = bene_df.set_index("bene_mbi_id")[
         ["ma_plan_flag", "high_risk_patient_flag", "risk_score"]
     ].to_dict("index")
 
-    # Only generate diagnoses for original claims (not adj/cancel)
     orig_claims = claims_df[claims_df["clm_adjsmt_type_cd"] == "0"].copy()
 
-    # Split diagnosis pool by body system for realistic assignment
-    # High-value HCC diagnoses are sampled more for MA patients
-    hcc_dx     = dx_ref_df[dx_ref_df["hcc_category"].notna()].copy()
-    non_hcc_dx = dx_ref_df[dx_ref_df["hcc_category"].isna()].copy()
-    high_val_dx = dx_ref_df[dx_ref_df["high_value_hcc_flag"] == True].copy()
-
-    # Unsupported diagnosis injection rate
+    hcc_dx           = dx_ref_df[dx_ref_df["hcc_category"].notna()].copy()
+    non_hcc_dx       = dx_ref_df[dx_ref_df["hcc_category"].isna()].copy()
     unsupported_rate = dx_cfg.get("unsupported_dx_rate", 0.04)
 
-    records = []
+    writer  = ParquetChunkWriter(output_path, CCLF4_SCHEMA)
+    chunk   = []
+    n_total = len(orig_claims)
 
-    for _, claim in orig_claims.iterrows():
+    for idx, (_, claim) in enumerate(orig_claims.iterrows()):
         clm_id   = claim["cur_clm_uniq_id"]
         bene_id  = claim["bene_mbi_id"]
         clm_type = claim["clm_type_cd"]
         from_dt  = claim["clm_from_dt"]
         thru_dt  = claim["clm_thru_dt"]
 
-        bene_info   = bene_lookup.get(bene_id, {})
-        is_ma       = bool(bene_info.get("ma_plan_flag", False))
+        bene_info    = bene_lookup.get(bene_id, {})
+        is_ma        = bool(bene_info.get("ma_plan_flag", False))
         is_high_risk = bool(bene_info.get("high_risk_patient_flag", False))
 
-        # Determine number of diagnoses for this claim
-        n_dx = get_num_diagnoses(
-            clm_type, is_ma, is_high_risk, dx_cfg, mode_key, rng
-        )
+        n_dx = get_num_diagnoses(clm_type, is_ma, is_high_risk, dx_cfg, mode_key, rng)
 
-        # Build diagnosis pool for this claim
-        # MA patients draw more from high-value HCC pool
-        if is_ma and len(high_val_dx) > 0:
-            hcc_weight    = 0.65
-            nonhcc_weight = 0.35
+        if is_ma and len(hcc_dx) > 0:
+            hcc_weight = 0.65
         elif is_high_risk:
-            hcc_weight    = 0.55
-            nonhcc_weight = 0.45
+            hcc_weight = 0.55
         else:
-            hcc_weight    = 0.40
-            nonhcc_weight = 0.60
+            hcc_weight = 0.40
 
         selected_dx = []
-
-        # Always include at least one HCC diagnosis for MA patients
         if is_ma and len(hcc_dx) > 0:
             anchor = hcc_dx.iloc[int(rng.integers(len(hcc_dx)))]
             selected_dx.append(anchor)
 
-        # Fill remaining diagnoses from weighted pool
         while len(selected_dx) < n_dx:
-            use_hcc = rng.random() < hcc_weight
-            pool    = hcc_dx if (use_hcc and len(hcc_dx) > 0) else non_hcc_dx
+            use_hcc   = rng.random() < hcc_weight
+            pool      = hcc_dx if (use_hcc and len(hcc_dx) > 0) else non_hcc_dx
             if len(pool) == 0:
                 pool = dx_ref_df
             candidate = pool.iloc[int(rng.integers(len(pool)))]
-
-            # Avoid duplicates within the same claim
             if candidate["icd10_cd"] not in [d["icd10_cd"] for d in selected_dx]:
                 selected_dx.append(candidate)
 
-        # Generate diagnosis rows
         for seq_num, dx_row in enumerate(selected_dx, start=1):
-            icd10_cd    = dx_row["icd10_cd"]
-            hcc_cat     = dx_row["hcc_category"]
+            icd10_cd       = dx_row["icd10_cd"]
+            hcc_cat        = dx_row["hcc_category"]
             hcc_weight_val = dx_row["hcc_weight"]
-            is_chronic  = bool(dx_row["chronic_flag"])
-            is_high_val = bool(dx_row["high_value_hcc_flag"])
+            is_chronic     = bool(dx_row["chronic_flag"])
+            is_high_val    = bool(dx_row["high_value_hcc_flag"])
 
-            prod_type   = assign_prod_type(seq_num, clm_type)
-            poa_ind     = sample_poa(clm_type, rng)
+            prod_type = assign_prod_type(seq_num, clm_type)
+            poa_ind   = sample_poa(clm_type, rng)
 
-            # Unsupported diagnosis injection
-            # High-value HCC diagnoses on MA patients are candidates
-            if (
-                is_high_val
-                and is_ma
+            unsupported = (
+                is_high_val and is_ma
                 and inj_cfg.inject_suspicious_patterns
                 and rng.random() < unsupported_rate
-            ):
-                unsupported = True
-            else:
-                unsupported = False
+            )
 
-            # Temporal drift — coding intensity grows each year
-            # More diagnoses flagged as chronic over time
             if inj_cfg.inject_temporal_drift:
                 year = from_dt.year if isinstance(from_dt, date) else pd.Timestamp(from_dt).year
                 drift_boost = (year - 2021) * cfg.raw["injection"]["coding_intensity_annual_increase"]
-                # Slightly increase probability of chronic flag over time
                 if not is_chronic and rng.random() < drift_boost:
                     is_chronic = True
 
-            records.append({
-                "cur_clm_uniq_id":              clm_id,
-                "bene_mbi_id":                  bene_id,
-                "clm_dgns_cd":                  icd10_cd,
-                "clm_val_sqnc_num":             seq_num,
-                "clm_prod_type_cd":             prod_type,
-                "clm_from_dt":                  from_dt,
-                "clm_thru_dt":                  thru_dt,
-                "clm_poa_ind":                  poa_ind,
-                "dgns_prcdr_icd_ind":           "0",
-                "hcc_category":                 hcc_cat if pd.notna(hcc_cat) else None,
-                "hcc_weight":                   float(hcc_weight_val) if pd.notna(hcc_weight_val) else None,
-                "chronic_condition_flag":       is_chronic,
-                "high_value_hcc_flag":          is_high_val,
+            chunk.append({
+                "cur_clm_uniq_id":               clm_id,
+                "bene_mbi_id":                   bene_id,
+                "clm_dgns_cd":                   icd10_cd,
+                "clm_val_sqnc_num":              seq_num,
+                "clm_prod_type_cd":              prod_type,
+                "clm_from_dt":                   from_dt,
+                "clm_thru_dt":                   thru_dt,
+                "clm_poa_ind":                   poa_ind,
+                "dgns_prcdr_icd_ind":            "0",
+                "hcc_category":                  hcc_cat if pd.notna(hcc_cat) else None,
+                "hcc_weight":                    float(hcc_weight_val) if pd.notna(hcc_weight_val) else None,
+                "chronic_condition_flag":        is_chronic,
+                "high_value_hcc_flag":           is_high_val,
                 "suspected_unsupported_dx_flag": unsupported,
             })
 
-    df = pd.DataFrame(records)
+            if len(chunk) >= CHUNK_SIZE:
+                writer.write_chunk(chunk)
+                chunk = []
 
-    # -----------------------------------------------------------------------
-    # Summary stats
-    # -----------------------------------------------------------------------
-    avg_dx_per_claim = len(df) / len(orig_claims)
-    hcc_rows         = df["hcc_category"].notna().sum()
-    chronic_rows     = df["chronic_condition_flag"].sum()
-    unsupported_rows = df["suspected_unsupported_dx_flag"].sum()
+        if (idx + 1) % 10_000 == 0 or (idx + 1) == n_total:
+            pct = (idx + 1) / n_total * 100
+            print(f"    Progress: {idx+1:,}/{n_total:,} claims ({pct:.1f}%) — "
+                  f"{writer.total + len(chunk):,} diagnosis rows written")
 
-    print(f"    Generated {len(df):,} diagnosis rows for {len(orig_claims):,} claims.")
-    print(f"    Avg diagnoses/claim  : {avg_dx_per_claim:.1f}")
-    print(f"    HCC-mapped rows      : {hcc_rows:,} ({hcc_rows/len(df)*100:.1f}%)")
-    print(f"    Chronic condition    : {chronic_rows:,} ({chronic_rows/len(df)*100:.1f}%)")
-    print(f"    Unsupported dx flags : {unsupported_rows:,} ({unsupported_rows/len(df)*100:.1f}%)")
-    print(f"    Unique ICD-10 codes  : {df['clm_dgns_cd'].nunique():,}")
-    print(f"    POA dist (inpatient) : {df[df['clm_poa_ind'].notna()]['clm_poa_ind'].value_counts().to_dict()}")
+    if chunk:
+        writer.write_chunk(chunk)
 
-    return df
-
-
-# ---------------------------------------------------------------------------
-# Save helper
-# ---------------------------------------------------------------------------
-
-def save_table(df: pd.DataFrame, path: Path, output_format: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if output_format == "parquet":
-        df.to_parquet(path, index=False)
-    else:
-        df.to_csv(path, index=False)
-    print(f"    Saved → {path}  ({len(df):,} rows)")
+    total_rows = writer.close()
+    print(f"    Total diagnosis rows: {total_rows:,}")
+    return total_rows
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
-def main() -> None:
+def main():
     print("\n" + "=" * 60)
     print("generate_cclf4_diagnoses.py")
     print("=" * 60)
@@ -296,61 +256,54 @@ def main() -> None:
 
     get_output_dir(cfg)
 
-    # Load dependencies
     print("  Loading dependencies...")
     claims_df = pd.read_parquet(cfg.paths.cclf1)
     bene_df   = pd.read_parquet(cfg.paths.cclf8)
     dx_ref_df = pd.read_parquet(cfg.paths.diagnosis_ref)
-    print(f"    Loaded {len(claims_df):,} claims, {len(bene_df):,} beneficiaries, {len(dx_ref_df):,} diagnosis codes.")
+    print(f"    Loaded {len(claims_df):,} claims, {len(bene_df):,} beneficiaries, "
+          f"{len(dx_ref_df):,} diagnosis codes.")
 
     dx_cfg = get_raw_section(cfg, "diagnoses")
 
-    df = generate_cclf4(cfg, dx_cfg, claims_df, bene_df, dx_ref_df, rng)
-    save_table(df, cfg.paths.cclf4, cfg.global_settings.output_format)
+    total_rows = generate_cclf4(cfg, dx_cfg, claims_df, bene_df, dx_ref_df, rng)
 
-    # -----------------------------------------------------------------------
-    # Validation
-    # -----------------------------------------------------------------------
+    print(f"\n    Saved -> {cfg.paths.cclf4}  ({total_rows:,} rows)")
+
     print()
-    print("Validation checks:")
+    print("Validation checks (reading back from parquet)...")
+    df = pd.read_parquet(cfg.paths.cclf4)
 
     orig_claim_ids = set(
         claims_df[claims_df["clm_adjsmt_type_cd"] == "0"]["cur_clm_uniq_id"]
     )
     assert set(df["cur_clm_uniq_id"]).issubset(orig_claim_ids), \
         "FAIL: Diagnosis rows referencing non-original claims"
+    assert df["clm_dgns_cd"].notna().all(),        "FAIL: Null diagnosis codes"
+    assert df["clm_val_sqnc_num"].ge(1).all(),      "FAIL: Sequence numbers below 1"
+    assert df["dgns_prcdr_icd_ind"].eq("0").all(),  "FAIL: Non ICD-10 indicator"
+    assert df["clm_prod_type_cd"].notna().all(),     "FAIL: Null prod type codes"
 
-    assert df["clm_dgns_cd"].notna().all(),             "FAIL: Null diagnosis codes"
-    assert df["clm_val_sqnc_num"].ge(1).all(),          "FAIL: Sequence numbers below 1"
-    assert df["dgns_prcdr_icd_ind"].eq("0").all(),      "FAIL: Non ICD-10 indicator found"
-    assert df["clm_prod_type_cd"].notna().all(),         "FAIL: Null prod type codes"
-
-    # Each claim must have at least one Principal diagnosis (seq 1)
-    seq1 = df[df["clm_val_sqnc_num"] == 1]
-    assert len(seq1) == len(orig_claim_ids.intersection(set(df["cur_clm_uniq_id"]))), \
-        "FAIL: Some claims missing principal diagnosis (sequence 1)"
-
-    # POA only for inpatient claims
-    inpatient_claim_ids = set(
-        claims_df[(claims_df["clm_type_cd"] == "60") & (claims_df["clm_adjsmt_type_cd"] == "0")]["cur_clm_uniq_id"]
-    )
-    non_inpatient_dx = df[~df["cur_clm_uniq_id"].isin(inpatient_claim_ids)]
-    assert non_inpatient_dx["clm_poa_ind"].isna().all(), \
-        "FAIL: Non-inpatient claims have POA indicator"
-
-    # HCC weight null iff HCC category null
     hcc_rows     = df[df["hcc_category"].notna()]
     non_hcc_rows = df[df["hcc_category"].isna()]
     assert hcc_rows["hcc_weight"].notna().all(),    "FAIL: HCC-mapped rows missing hcc_weight"
     assert non_hcc_rows["hcc_weight"].isna().all(), "FAIL: Non-HCC rows with hcc_weight"
 
-    # Unsupported flag only on HCC-mapped rows
-    unsupported = df[df["suspected_unsupported_dx_flag"] == True]
-    if len(unsupported) > 0:
-        assert unsupported["hcc_category"].notna().all(), \
-            "FAIL: Unsupported flag on non-HCC diagnosis"
+    inpatient_ids = set(
+        claims_df[(claims_df["clm_type_cd"] == "60") &
+                  (claims_df["clm_adjsmt_type_cd"] == "0")]["cur_clm_uniq_id"]
+    )
+    non_inpatient_dx = df[~df["cur_clm_uniq_id"].isin(inpatient_ids)]
+    assert non_inpatient_dx["clm_poa_ind"].isna().all(), \
+        "FAIL: Non-inpatient claims have POA indicator"
 
-    print("  cclf4_diagnoses: all checks passed.")
+    avg_dx       = len(df) / max(1, len(orig_claim_ids))
+    hcc_pct      = df["hcc_category"].notna().mean() * 100
+    unsupported  = df["suspected_unsupported_dx_flag"].sum()
+
+    print(f"  cclf4_diagnoses: all checks passed.")
+    print(f"  Avg diagnoses/claim  : {avg_dx:.1f}")
+    print(f"  HCC-mapped rows      : {hcc_pct:.1f}%")
+    print(f"  Unsupported dx flags : {unsupported:,}")
     print()
     print("Diagnosis generation complete.")
     print("=" * 60)

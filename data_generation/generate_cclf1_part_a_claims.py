@@ -3,6 +3,12 @@ data_generation/generate_cclf1_part_a_claims.py
 
 Generates the Part A claims header table (CCLF1).
 
+Performance-optimized:
+  - Vectorized beneficiary and provider sampling (pre-sampled in bulk)
+  - Vectorized date, payment, and flag generation where possible
+  - Chunked parquet writes to keep memory flat
+  - Progress reporting every 50K claims
+
 Dependencies:
     - config.yaml (via config_loader)
     - outputs/generated/{mode}/cclf8_beneficiary.parquet
@@ -10,9 +16,6 @@ Dependencies:
 
 Usage:
     python data_generation/generate_cclf1_part_a_claims.py
-
-Output (prototype mode):
-    outputs/generated/prototype/cclf1_part_a_claims.parquet
 """
 
 import sys
@@ -23,190 +26,216 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 import random
-import uuid
 from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from src.utils.config_loader import load_config, get_output_dir, get_raw_section, summarize_config
 
+CHUNK_SIZE = 50_000
+
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Chunked writer
 # ---------------------------------------------------------------------------
 
-def generate_claim_id(i: int) -> str:
+# Explicit PyArrow schema — prevents null-type inference on all-None columns
+CCLF1_SCHEMA = pa.schema([
+    pa.field("cur_clm_uniq_id",      pa.string()),
+    pa.field("bene_mbi_id",           pa.string()),
+    pa.field("provider_id",           pa.string()),
+    pa.field("clm_type_cd",           pa.string()),
+    pa.field("clm_from_dt",           pa.date32()),
+    pa.field("clm_thru_dt",           pa.date32()),
+    pa.field("clm_mdcr_npmt_rsn_cd",  pa.string()),
+    pa.field("clm_pmt_amt",           pa.float64()),
+    pa.field("clm_adjsmt_type_cd",    pa.string()),
+    pa.field("clm_orig_clm_id",       pa.string()),
+    pa.field("dgns_prcdr_icd_ind",    pa.string()),
+    pa.field("facility_type",         pa.string()),
+    pa.field("claim_status",          pa.string()),
+    pa.field("drg_cd",                pa.string()),
+    pa.field("length_of_stay",        pa.float64()),
+    pa.field("overpayment_flag",      pa.bool_()),
+    pa.field("overpayment_amt",       pa.float64()),
+    pa.field("audit_eligible_flag",   pa.bool_()),
+    pa.field("true_error_flag",       pa.bool_()),
+    pa.field("created_at",            pa.timestamp("ns")),
+])
+
+
+class ParquetChunkWriter:
+    def __init__(self, path, schema):
+        self.path   = path
+        self.schema = schema
+        self.writer = None
+        self.total  = 0
+
+    def write_chunk(self, records):
+        if not records:
+            return
+        df    = pd.DataFrame(records)
+        table = pa.Table.from_pandas(df, schema=self.schema, preserve_index=False)
+        if self.writer is None:
+            self.writer = pq.ParquetWriter(str(self.path), self.schema)
+        self.writer.write_table(table)
+        self.total += len(records)
+
+    def close(self):
+        if self.writer:
+            self.writer.close()
+        return self.total
+
+
+# ---------------------------------------------------------------------------
+# Vectorized helpers
+# ---------------------------------------------------------------------------
+
+def generate_claim_id(i):
     return f"CLM1{str(i).zfill(10)}"
 
 
-def generate_adjustment_id(orig_id: str, suffix: str) -> str:
-    return f"{orig_id}_{suffix}"
+def vectorized_dates(n, data_start, data_end, clm_types, los_cfg, rng):
+    """
+    Generate from_dt and thru_dt for all claims at once.
+    Returns two lists of date objects.
+    """
+    total_days   = (data_end - data_start).days
+    from_offsets = rng.integers(0, total_days, size=n)
+    from_dates   = [data_start + timedelta(days=int(o)) for o in from_offsets]
+
+    thru_dates = []
+    for i, (fd, ct) in enumerate(zip(from_dates, clm_types)):
+        if ct == "60":   # Inpatient
+            los = int(np.clip(rng.normal(los_cfg["mean"], los_cfg["std"]),
+                              los_cfg["min"], los_cfg["max"]))
+            thru_dates.append(min(fd + timedelta(days=los), data_end))
+        elif ct == "10": # HHA
+            thru_dates.append(min(fd + timedelta(days=int(rng.integers(14, 61))), data_end))
+        elif ct == "50": # Hospice
+            thru_dates.append(min(fd + timedelta(days=int(rng.integers(1, 180))), data_end))
+        elif ct == "20": # SNF
+            thru_dates.append(min(fd + timedelta(days=int(rng.integers(3, 30))), data_end))
+        else:            # Outpatient — same day
+            thru_dates.append(fd)
+
+    return from_dates, thru_dates
 
 
-def sample_service_dates(
-    data_start: date,
-    data_end: date,
-    clm_type: str,
-    los_cfg: dict,
-    rng: np.random.Generator,
-) -> tuple[date, date]:
-    """Sample claim from/thru dates. Inpatient uses LOS distribution."""
-    total_days = (data_end - data_start).days
-    from_offset = int(rng.integers(0, total_days))
-    from_dt = data_start + timedelta(days=from_offset)
-
-    if clm_type == "60":  # Inpatient
-        los = int(np.clip(
-            rng.normal(los_cfg["mean"], los_cfg["std"]),
-            los_cfg["min"],
-            los_cfg["max"]
-        ))
-        thru_dt = min(from_dt + timedelta(days=los), data_end)
-    elif clm_type == "10":  # HHA — multi-day episodes
-        episode_days = int(rng.integers(14, 61))
-        thru_dt = min(from_dt + timedelta(days=episode_days), data_end)
-    elif clm_type == "50":  # Hospice — can be long
-        episode_days = int(rng.integers(1, 180))
-        thru_dt = min(from_dt + timedelta(days=episode_days), data_end)
-    elif clm_type == "20":  # SNF
-        episode_days = int(rng.integers(3, 30))
-        thru_dt = min(from_dt + timedelta(days=episode_days), data_end)
-    else:  # Outpatient — same day
-        thru_dt = from_dt
-
-    return from_dt, thru_dt
-
-
-def sample_payment(
-    clm_type: str,
-    pay_cfg: dict,
-    claim_status: str,
-    rng: np.random.Generator,
-) -> float:
-    """Sample a realistic payment amount for a given claim type."""
-    if claim_status == "Denied":
+def sample_payment(clm_type, pay_cfg, is_denied, rng):
+    if is_denied:
         return 0.0
-
     cfg = pay_cfg.get(clm_type, pay_cfg["40"])
     raw = rng.normal(cfg["mean"], cfg["std"])
-    amount = float(np.clip(raw, cfg["min"], cfg["max"]))
-    return round(amount, 2)
-
-
-def apply_temporal_drift(
-    from_dt: date,
-    base_payment: float,
-    inj_cfg: dict,
-) -> float:
-    """
-    Apply temporal drift: slight payment increase over years
-    to simulate coding intensity growth.
-    """
-    drift_rate = inj_cfg.get("coding_intensity_annual_increase", 0.03)
-    year_offset = from_dt.year - 2021
-    multiplier  = 1.0 + (drift_rate * year_offset)
-    return round(base_payment * multiplier, 2)
+    return round(float(np.clip(raw, cfg["min"], cfg["max"])), 2)
 
 
 # ---------------------------------------------------------------------------
 # Main generator
 # ---------------------------------------------------------------------------
 
-def generate_cclf1(
-    cfg,
-    parta_cfg: dict,
-    bene_df: pd.DataFrame,
-    provider_df: pd.DataFrame,
-    rng: np.random.Generator,
-) -> pd.DataFrame:
-    """Generate CCLF1 Part A claims header table."""
-    print("  Generating CCLF1 Part A claims...")
+def generate_cclf1(cfg, parta_cfg, bene_df, provider_df, rng):
+    print("  Generating CCLF1 Part A claims (vectorized + chunked)...")
 
-    n_claims    = cfg.scale.num_part_a_claims
-    data_start  = date.fromisoformat(cfg.global_settings.date_start)
-    data_end    = date.fromisoformat(cfg.global_settings.date_end)
-    inj_cfg     = cfg.injection
+    n_claims   = cfg.scale.num_part_a_claims
+    data_start = date.fromisoformat(cfg.global_settings.date_start)
+    data_end   = date.fromisoformat(cfg.global_settings.date_end)
+    inj_cfg    = cfg.injection
 
-    # Separate active providers by type for realistic assignment
+    # -----------------------------------------------------------------------
+    # Pre-compute sampling pools
+    # -----------------------------------------------------------------------
     facility_types = {"Hospital", "SNF", "HHA", "Hospice", "Outpatient_Facility"}
     facility_providers = provider_df[
         provider_df["provider_type"].isin(facility_types)
     ]["provider_id"].values
-
-    # Fall back to all providers if too few facility providers (prototype mode)
     if len(facility_providers) < 3:
         facility_providers = provider_df["provider_id"].values
 
-    # Claim type weights
-    ct_cfg      = parta_cfg["claim_type_distribution"]
-    ct_labels   = list(ct_cfg.keys())
-    ct_probs    = list(ct_cfg.values())
+    provider_risk = dict(zip(provider_df["provider_id"], provider_df["provider_risk_profile"]))
 
-    # Provider risk profiles for anomaly logic
-    provider_risk = dict(zip(
-        provider_df["provider_id"],
-        provider_df["provider_risk_profile"]
-    ))
+    # Claim type distribution
+    ct_cfg    = parta_cfg["claim_type_distribution"]
+    ct_labels = list(ct_cfg.keys())
+    ct_probs  = list(ct_cfg.values())
 
     # DRG pool
-    drg_pool    = parta_cfg["drg_codes"]
-    drg_codes   = [d["code"] for d in drg_pool]
+    drg_pool   = parta_cfg["drg_codes"]
+    drg_codes  = [d["code"] for d in drg_pool]
     drg_weights = [d["weight"] for d in drg_pool]
-    drg_total   = sum(drg_weights)
-    drg_probs   = [w / drg_total for w in drg_weights]
+    drg_total  = sum(drg_weights)
+    drg_probs  = [w / drg_total for w in drg_weights]
 
-    los_cfg     = parta_cfg["length_of_stay"]
-    pay_cfg     = parta_cfg["payment_ranges"]
-
-    adj_rate    = parta_cfg["adjustment_rate"]
-    cancel_rate = parta_cfg["cancellation_rate"]
-    denial_rate = parta_cfg["denial_rate"]
-    op_rate     = parta_cfg["overpayment_rate"]
+    los_cfg        = parta_cfg["length_of_stay"]
+    pay_cfg        = parta_cfg["payment_ranges"]
+    adj_rate       = parta_cfg["adjustment_rate"]
+    cancel_rate    = parta_cfg["cancellation_rate"]
+    denial_rate    = parta_cfg["denial_rate"]
+    op_rate        = parta_cfg["overpayment_rate"]
     op_pct_lo, op_pct_hi = parta_cfg["overpayment_pct_range"]
     audit_elig_rate = parta_cfg["audit_eligible_rate"]
 
-    # Denial reason codes (simplified realistic set)
-    denial_codes = [
-        "N1",    # Benefit not covered
-        "N30",   # Not medically necessary
-        "N115",  # Documentation insufficient
-        "B7",    # Not covered as billed
-        "MA130", # Claim lacks required info
-    ]
+    denial_codes = ["N1", "N30", "N115", "B7", "MA130"]
 
-    records      = []
-    claim_counter = 1
-    adj_claims   = []   # Collect adjustment/cancellation pairs after originals
+    facility_map = {"60": "Hospital", "40": "Outpatient",
+                    "20": "SNF", "10": "HHA", "50": "Hospice"}
+
+    # -----------------------------------------------------------------------
+    # Pre-sample ALL beneficiaries at once (vectorized — the main speedup)
+    # -----------------------------------------------------------------------
+    print(f"    Pre-sampling {n_claims:,} beneficiary assignments...")
+    util_weights = np.where(
+        bene_df["utilization_segment"] == "High", 3.0,
+        np.where(bene_df["utilization_segment"] == "Medium", 1.5, 0.8)
+    ).astype(float)
+    util_weights /= util_weights.sum()
+
+    # Sample all bene indices at once — O(n) instead of O(n) loop calls
+    bene_indices  = rng.choice(len(bene_df), size=n_claims, p=util_weights)
+    bene_ids      = bene_df["bene_mbi_id"].values[bene_indices]
+    ma_flags      = bene_df["ma_plan_flag"].values[bene_indices]
+
+    # Pre-sample claim types and providers
+    clm_types    = rng.choice(ct_labels, size=n_claims, p=ct_probs)
+    provider_ids = rng.choice(facility_providers, size=n_claims)
+
+    # Pre-sample denial flags
+    denial_rand  = rng.random(size=n_claims)
+    op_rand      = rng.random(size=n_claims)
+    audit_rand   = rng.random(size=n_claims)
+    adj_rand     = rng.random(size=n_claims)
+
+    # Pre-generate dates vectorized
+    print(f"    Generating service dates...")
+    from_dates, thru_dates = vectorized_dates(
+        n_claims, data_start, data_end, clm_types, los_cfg, rng
+    )
+
+    # -----------------------------------------------------------------------
+    # Main loop — now just builds records, no sampling calls inside
+    # -----------------------------------------------------------------------
+    print(f"    Building {n_claims:,} claim records...")
+    writer    = ParquetChunkWriter(cfg.paths.cclf1, CCLF1_SCHEMA)
+    chunk     = []
+    adj_queue = []
 
     for i in range(n_claims):
-        claim_id   = generate_claim_id(claim_counter)
-        claim_counter += 1
-
-        # Beneficiary — weight toward high utilizers for realism
-        util_weights = np.where(
-            bene_df["utilization_segment"] == "High", 3.0,
-            np.where(bene_df["utilization_segment"] == "Medium", 1.5, 0.8)
-        ).astype(float)
-        util_weights /= util_weights.sum()
-        bene_row = bene_df.iloc[int(rng.choice(len(bene_df), p=util_weights))]
-        bene_id  = bene_row["bene_mbi_id"]
-
-        # Provider
-        provider_id = str(rng.choice(facility_providers))
+        claim_id    = generate_claim_id(i + 1)
+        bene_id     = str(bene_ids[i])
+        provider_id = str(provider_ids[i])
+        clm_type    = str(clm_types[i])
+        from_dt     = from_dates[i]
+        thru_dt     = thru_dates[i]
         risk_profile = provider_risk.get(provider_id, "Normal")
 
-        # Claim type
-        clm_type = str(rng.choice(ct_labels, p=ct_probs))
-
-        # Dates
-        from_dt, thru_dt = sample_service_dates(data_start, data_end, clm_type, los_cfg, rng)
-
-        # Claim status and denial
-        is_denied = rng.random() < denial_rate
-        # Outlier/Suspicious providers have higher denial rates
+        # Denial
+        base_denial = denial_rate
         if risk_profile in ("Suspicious", "Outlier"):
-            is_denied = rng.random() < (denial_rate * 1.8)
+            base_denial = denial_rate * 1.8
+        is_denied = denial_rand[i] < base_denial
 
         if is_denied:
             claim_status = "Denied"
@@ -216,23 +245,27 @@ def generate_cclf1(
             denial_code  = None
 
         # Payment
-        base_payment = sample_payment(clm_type, pay_cfg, claim_status, rng)
+        base_pmt = sample_payment(clm_type, pay_cfg, is_denied, rng)
 
-        # Outlier providers get inflated payments
+        # Outlier inflation
         if risk_profile == "Outlier" and claim_status == "Paid" and inj_cfg.inject_outliers:
             mult_lo, mult_hi = inj_cfg.outlier_payment_multiplier
-            outlier_mult = float(rng.uniform(mult_lo, mult_hi))
-            # Only inflate ~20% of outlier provider claims
             if rng.random() < 0.20:
-                base_payment = round(base_payment * outlier_mult, 2)
+                base_pmt = round(base_pmt * float(rng.uniform(mult_lo, mult_hi)), 2)
 
         # Temporal drift
         if inj_cfg.inject_temporal_drift:
-            base_payment = apply_temporal_drift(from_dt, base_payment, cfg.raw["injection"])
+            drift_rate   = cfg.raw["injection"]["coding_intensity_annual_increase"]
+            year_offset  = from_dt.year - 2021
+            base_pmt     = round(base_pmt * (1.0 + drift_rate * year_offset), 2)
 
-        clm_pmt_amt = base_payment
+        # Flu season boost for inpatient Q1
+        if inj_cfg.inject_temporal_drift and clm_type == "60" and from_dt.month in (1, 2, 3):
+            base_pmt = round(base_pmt * 1.08, 2)
 
-        # DRG — inpatient only
+        clm_pmt_amt = base_pmt
+
+        # DRG / LOS
         if clm_type == "60":
             drg_cd = str(rng.choice(drg_codes, p=drg_probs))
             los    = (thru_dt - from_dt).days
@@ -241,7 +274,7 @@ def generate_cclf1(
             los    = None
 
         # Overpayment
-        if claim_status == "Paid" and rng.random() < op_rate:
+        if claim_status == "Paid" and op_rand[i] < op_rate:
             overpayment_flag = True
             op_pct           = float(rng.uniform(op_pct_lo, op_pct_hi))
             overpayment_amt  = round(clm_pmt_amt * op_pct, 2)
@@ -251,20 +284,9 @@ def generate_cclf1(
             overpayment_amt  = 0.0
             true_error_flag  = False
 
-        # Audit eligibility — denied and cancelled claims not eligible
-        audit_eligible = (claim_status == "Paid") and (rng.random() < audit_elig_rate)
+        audit_eligible = (claim_status == "Paid") and (audit_rand[i] < audit_elig_rate)
 
-        # Facility type from claim type
-        facility_map = {
-            "60": "Hospital",
-            "40": "Outpatient",
-            "20": "SNF",
-            "10": "HHA",
-            "50": "Hospice",
-        }
-        facility_type = facility_map.get(clm_type, "Outpatient")
-
-        records.append({
+        record = {
             "cur_clm_uniq_id":       claim_id,
             "bene_mbi_id":           bene_id,
             "provider_id":           provider_id,
@@ -276,7 +298,7 @@ def generate_cclf1(
             "clm_adjsmt_type_cd":    "0",
             "clm_orig_clm_id":       None,
             "dgns_prcdr_icd_ind":    "0",
-            "facility_type":         facility_type,
+            "facility_type":         facility_map.get(clm_type, "Outpatient"),
             "claim_status":          claim_status,
             "drg_cd":                drg_cd,
             "length_of_stay":        los,
@@ -285,93 +307,72 @@ def generate_cclf1(
             "audit_eligible_flag":   audit_eligible,
             "true_error_flag":       true_error_flag,
             "created_at":            pd.Timestamp(from_dt),
-        })
+        }
+        chunk.append(record)
 
-        # --- Queue adjustment or cancellation for this claim ---
+        # Queue adj/cancel
         if claim_status == "Paid":
-            rand_val = rng.random()
-            if rand_val < cancel_rate and inj_cfg.inject_duplicates:
-                adj_claims.append(("cancel", claim_id, records[-1].copy()))
-            elif rand_val < (cancel_rate + adj_rate) and inj_cfg.inject_anomalies:
-                adj_claims.append(("adjust", claim_id, records[-1].copy()))
+            rv = adj_rand[i]
+            if rv < cancel_rate and inj_cfg.inject_duplicates:
+                adj_queue.append(("cancel", claim_id, record.copy()))
+            elif rv < (cancel_rate + adj_rate) and inj_cfg.inject_anomalies:
+                adj_queue.append(("adjust", claim_id, record.copy()))
 
-    # -----------------------------------------------------------------------
-    # Append adjustment and cancellation records
-    # -----------------------------------------------------------------------
-    for adj_type, orig_id, orig_rec in adj_claims:
-        adj_id = generate_adjustment_id(orig_id, "ADJ" if adj_type == "adjust" else "CXL")
+        if len(chunk) >= CHUNK_SIZE:
+            writer.write_chunk(chunk)
+            chunk = []
 
+        if (i + 1) % 50_000 == 0 or (i + 1) == n_claims:
+            pct = (i + 1) / n_claims * 100
+            print(f"    Progress: {i+1:,}/{n_claims:,} ({pct:.1f}%)")
+
+    # Flush remaining originals
+    if chunk:
+        writer.write_chunk(chunk)
+        chunk = []
+
+    print(f"    Original claims written: {writer.total:,}")
+    print(f"    Appending {len(adj_queue):,} adj/cancel records...")
+
+    # Adjustments
+    for adj_type, orig_id, orig_rec in adj_queue:
+        adj_id  = f"{orig_id}_{'ADJ' if adj_type == 'adjust' else 'CXL'}"
         adj_rec = orig_rec.copy()
-        adj_rec["cur_clm_uniq_id"]    = adj_id
-        adj_rec["clm_orig_clm_id"]    = orig_id
-        adj_rec["overpayment_flag"]   = False
-        adj_rec["overpayment_amt"]    = 0.0
-        adj_rec["true_error_flag"]    = False
+        adj_rec["cur_clm_uniq_id"]     = adj_id
+        adj_rec["clm_orig_clm_id"]     = orig_id
+        adj_rec["overpayment_flag"]    = False
+        adj_rec["overpayment_amt"]     = 0.0
+        adj_rec["true_error_flag"]     = False
         adj_rec["audit_eligible_flag"] = False
 
         if adj_type == "cancel":
-            adj_rec["clm_adjsmt_type_cd"] = "1"
-            adj_rec["claim_status"]       = "Cancelled"
-            adj_rec["clm_pmt_amt"]        = -abs(orig_rec["clm_pmt_amt"])
-            adj_rec["clm_mdcr_npmt_rsn_cd"] = None
+            adj_rec["clm_adjsmt_type_cd"]    = "1"
+            adj_rec["claim_status"]          = "Cancelled"
+            adj_rec["clm_pmt_amt"]           = -abs(orig_rec["clm_pmt_amt"])
+            adj_rec["clm_mdcr_npmt_rsn_cd"]  = None
         else:
             adj_rec["clm_adjsmt_type_cd"] = "2"
             adj_rec["claim_status"]       = "Adjusted"
-            # Adjustment payment is slightly modified original
             delta = float(rng.uniform(-0.15, 0.10))
             adj_rec["clm_pmt_amt"] = round(orig_rec["clm_pmt_amt"] * (1 + delta), 2)
 
-        records.append(adj_rec)
+        chunk.append(adj_rec)
+        if len(chunk) >= CHUNK_SIZE:
+            writer.write_chunk(chunk)
+            chunk = []
 
-    # -----------------------------------------------------------------------
-    # Build DataFrame
-    # -----------------------------------------------------------------------
-    df = pd.DataFrame(records)
+    if chunk:
+        writer.write_chunk(chunk)
 
-    # -----------------------------------------------------------------------
-    # Telehealth temporal injection — not applicable for Part A
-    # but apply seasonal flu spike for inpatient claims in Q1
-    # -----------------------------------------------------------------------
-    if inj_cfg.inject_temporal_drift:
-        flu_mask = (
-            (df["clm_type_cd"] == "60") &
-            (df["clm_from_dt"].apply(lambda d: d.month in [1, 2, 3]))
-        )
-        df.loc[flu_mask, "clm_pmt_amt"] = (
-            df.loc[flu_mask, "clm_pmt_amt"] * 1.08
-        ).round(2)
-
-    # Summary stats
-    orig_df = df[df["clm_adjsmt_type_cd"] == "0"]
-    print(f"    Generated {len(df):,} total records ({len(orig_df):,} original + {len(df)-len(orig_df):,} adj/cancel).")
-    print(f"    Claim type dist  : {orig_df['clm_type_cd'].value_counts().to_dict()}")
-    print(f"    Claim status     : {orig_df['claim_status'].value_counts().to_dict()}")
-    print(f"    Overpayment rate : {orig_df['overpayment_flag'].mean()*100:.1f}% of original claims")
-    print(f"    Avg payment      : ${orig_df[orig_df['claim_status']=='Paid']['clm_pmt_amt'].mean():,.2f}")
-    print(f"    Total payment    : ${orig_df[orig_df['claim_status']=='Paid']['clm_pmt_amt'].sum():,.0f}")
-    print(f"    Audit eligible   : {orig_df['audit_eligible_flag'].sum():,} claims")
-
-    return df
-
-
-# ---------------------------------------------------------------------------
-# Save helper
-# ---------------------------------------------------------------------------
-
-def save_table(df: pd.DataFrame, path: Path, output_format: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if output_format == "parquet":
-        df.to_parquet(path, index=False)
-    else:
-        df.to_csv(path, index=False)
-    print(f"    Saved → {path}  ({len(df):,} rows)")
+    total_rows = writer.close()
+    return total_rows
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
-def main() -> None:
+def main():
     print("\n" + "=" * 60)
     print("generate_cclf1_part_a_claims.py")
     print("=" * 60)
@@ -384,62 +385,58 @@ def main() -> None:
 
     get_output_dir(cfg)
 
-    # Load dependencies
     print("  Loading dependencies...")
     bene_df     = pd.read_parquet(cfg.paths.cclf8)
     provider_df = pd.read_parquet(cfg.paths.provider_dim)
     print(f"    Loaded {len(bene_df):,} beneficiaries, {len(provider_df):,} providers.")
 
-    parta_cfg = get_raw_section(cfg, "part_a_claims")
+    parta_cfg  = get_raw_section(cfg, "part_a_claims")
+    total_rows = generate_cclf1(cfg, parta_cfg, bene_df, provider_df, rng)
 
-    df = generate_cclf1(cfg, parta_cfg, bene_df, provider_df, rng)
-    save_table(df, cfg.paths.cclf1, cfg.global_settings.output_format)
+    print(f"\n    Saved -> {cfg.paths.cclf1}  ({total_rows:,} rows)")
 
-    # -----------------------------------------------------------------------
     # Validation
-    # -----------------------------------------------------------------------
     print()
-    print("Validation checks:")
+    print("Validation checks (reading back from parquet)...")
+    df = pd.read_parquet(cfg.paths.cclf1)
 
-    assert df["cur_clm_uniq_id"].is_unique,                         "FAIL: Duplicate claim IDs"
-    assert df["bene_mbi_id"].isin(bene_df["bene_mbi_id"]).all(),    "FAIL: Unknown beneficiary IDs"
-    assert df["provider_id"].isin(provider_df["provider_id"]).all(),"FAIL: Unknown provider IDs"
-    assert (df["clm_thru_dt"] >= df["clm_from_dt"]).all(),          "FAIL: thru_dt before from_dt"
-    assert df["dgns_prcdr_icd_ind"].eq("0").all(),                  "FAIL: Non ICD-10 indicator found"
+    assert df["cur_clm_uniq_id"].is_unique,                          "FAIL: Duplicate claim IDs"
+    assert df["bene_mbi_id"].isin(bene_df["bene_mbi_id"]).all(),     "FAIL: Unknown bene IDs"
+    assert df["provider_id"].isin(provider_df["provider_id"]).all(), "FAIL: Unknown provider IDs"
+    assert (df["clm_thru_dt"] >= df["clm_from_dt"]).all(),           "FAIL: thru_dt before from_dt"
+    assert df["dgns_prcdr_icd_ind"].eq("0").all(),                   "FAIL: Non ICD-10 indicator"
 
-    # Denied claims have $0 payment
     denied = df[df["claim_status"] == "Denied"]
-    assert denied["clm_pmt_amt"].eq(0.0).all(),                     "FAIL: Denied claims with non-zero payment"
+    assert denied["clm_pmt_amt"].eq(0.0).all(),                      "FAIL: Denied claims non-zero pmt"
 
-    # Cancelled claims have negative payment
     cancelled = df[df["claim_status"] == "Cancelled"]
     if len(cancelled) > 0:
-        assert cancelled["clm_pmt_amt"].le(0).all(),                "FAIL: Cancelled claims with positive payment"
+        assert cancelled["clm_pmt_amt"].le(0).all(),                 "FAIL: Cancelled claims positive pmt"
 
-    # Adjustment/cancel records have orig claim ID populated
     adj_cancel = df[df["clm_adjsmt_type_cd"].isin(["1", "2"])]
     if len(adj_cancel) > 0:
-        assert adj_cancel["clm_orig_clm_id"].notna().all(),         "FAIL: Adj/cancel records missing orig_clm_id"
+        assert adj_cancel["clm_orig_clm_id"].notna().all(),          "FAIL: Adj/cancel missing orig_clm_id"
 
-    # Original records have null orig claim ID
     originals = df[df["clm_adjsmt_type_cd"] == "0"]
-    assert originals["clm_orig_clm_id"].isna().all(),               "FAIL: Original claims with non-null orig_clm_id"
+    assert originals["clm_orig_clm_id"].isna().all(),                "FAIL: Originals with non-null orig_id"
 
-    # DRG only for inpatient
     inpatient = df[df["clm_type_cd"] == "60"]
     if len(inpatient) > 0:
-        assert inpatient["drg_cd"].notna().all(),                   "FAIL: Inpatient claims missing DRG"
-        assert inpatient["length_of_stay"].notna().all(),           "FAIL: Inpatient claims missing LOS"
+        assert inpatient["drg_cd"].notna().all(),                    "FAIL: Inpatient missing DRG"
+        assert inpatient["length_of_stay"].notna().all(),            "FAIL: Inpatient missing LOS"
 
-    non_inpatient = df[df["clm_type_cd"] != "60"]
-    assert non_inpatient["drg_cd"].isna().all(),                    "FAIL: Non-inpatient claims with DRG"
-    assert non_inpatient["length_of_stay"].isna().all(),            "FAIL: Non-inpatient claims with LOS"
+    non_ip = df[df["clm_type_cd"] != "60"]
+    assert non_ip["drg_cd"].isna().all(),                            "FAIL: Non-inpatient has DRG"
 
-    # Overpayment amount is 0 when flag is False
-    no_op = df[~df["overpayment_flag"]]
-    assert no_op["overpayment_amt"].eq(0.0).all(),                  "FAIL: Non-overpayment claims with non-zero overpayment_amt"
-
-    print("  cclf1_part_a_claims: all checks passed.")
+    orig_df = df[df["clm_adjsmt_type_cd"] == "0"]
+    print(f"  cclf1_part_a_claims: all checks passed.")
+    print(f"  Total records        : {len(df):,}")
+    print(f"  Original claims      : {len(orig_df):,}")
+    print(f"  Adj/cancel records   : {len(df) - len(orig_df):,}")
+    print(f"  Paid claims          : {(orig_df['claim_status']=='Paid').sum():,}")
+    print(f"  Denied claims        : {(orig_df['claim_status']=='Denied').sum():,}")
+    print(f"  Overpayment rate     : {orig_df['overpayment_flag'].mean()*100:.1f}%")
+    print(f"  Avg payment (paid)   : ${orig_df[orig_df['claim_status']=='Paid']['clm_pmt_amt'].mean():,.2f}")
     print()
     print("Part A claims generation complete.")
     print("=" * 60)

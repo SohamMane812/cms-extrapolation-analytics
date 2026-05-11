@@ -1,43 +1,39 @@
 # TODO.md — Backlog and Future Work
 
 ## Immediate Next Session
-- [ ] Build generate_reference_tables.py (procedure_ref and diagnosis_ref)
-- [ ] Build generate_provider_dim.py
-- [ ] Build generate_cclf8_beneficiaries.py
-- [ ] Build generate_cclf1_part_a_claims.py
-- [ ] Build generate_cclf4_diagnoses.py
-- [ ] Build generate_cclf5_part_b_claims.py
-- [ ] Build inject_bias_outliers_duplicates.py
-- [ ] Build config.yaml for generation parameters
-- [ ] Upload generated files to GCS
-- [ ] Load raw files into BigQuery raw_cms_claims dataset
+- [ ] Commit all SQL scripts and run_sql.py to GitHub
+- [ ] pip install pandas-gbq — resolve FutureWarning before full scale load
+- [ ] Build notebooks/01_data_quality_eda.ipynb
+- [ ] Build notebooks/02_claims_eda.ipynb
+- [ ] Build notebooks/03_extrapolation_simulation.ipynb
+- [ ] Build notebooks/04_provider_benchmarking.ipynb
+- [ ] Build notebooks/05_anomaly_detection.ipynb
 
 ## V1 Remaining Work
-- [ ] SQL: raw_to_staging transformations
-- [ ] SQL: staging_to_curated transformations
-- [ ] SQL: analytics aggregations
-- [ ] EDA notebooks (01 through 05)
-- [ ] Extrapolation simulation (notebook 03)
-- [ ] Provider benchmarking (notebook 04)
-- [ ] Basic anomaly detection (notebook 05)
-- [ ] Dashboard: Next.js setup
-- [ ] Dashboard: Executive Overview page
-- [ ] Dashboard: Claims Explorer page
-- [ ] Dashboard: Extrapolation Simulator page
-- [ ] Dashboard: Sample Fairness page
-- [ ] Dashboard: Provider Benchmarking page
-- [ ] Dashboard: Anomaly Detection page
-- [ ] Dashboard: Risk Adjustment page
-- [ ] Dashboard: Data Quality Monitor page
+- [ ] Validate analytical distributions in EDA notebooks
+- [ ] Confirm extrapolation results are analytically meaningful
+- [ ] Confirm anomaly scores correctly rank Suspicious/Outlier providers
+- [ ] Switch to full mode, regenerate data, reload BigQuery
+- [ ] Next.js dashboard setup
+- [ ] Executive Overview page
+- [ ] Claims Explorer page
+- [ ] Extrapolation Simulator page
+- [ ] Sample Fairness page
+- [ ] Provider Benchmarking page
+- [ ] Anomaly Detection page
+- [ ] Risk Adjustment page
+- [ ] Data Quality Monitor page
 
 ## V2 Backlog
 - [ ] K-Means clustering for providers (notebook 06)
 - [ ] ML claim overpayment prediction (notebook 07)
 - [ ] ML model validation (notebook 08)
-- [ ] Coding intensity analysis
+- [ ] Coding intensity deep analysis
 - [ ] Dashboard: Clustering page
 - [ ] Dashboard: ML Model Results page
 - [ ] rendering_provider_id on CCLF5
+- [ ] inject_bias_outliers_duplicates.py post-processing script
+- [ ] audit_sample generation script
 
 ## V3 Backlog
 - [ ] Model explainability (SHAP)
@@ -47,4 +43,6 @@
 - [ ] Demo video
 
 ## Technical Debt
-- None yet
+- pandas-gbq not installed — FutureWarning on BigQuery loads
+- peer_group_summary only has 4 rows in prototype (limited peer group coverage at 50 providers)
+- extrapolation_results has 4 rows — will be more meaningful at full scale
