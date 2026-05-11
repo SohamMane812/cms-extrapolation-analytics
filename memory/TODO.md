@@ -1,39 +1,63 @@
-# TODO.md — Backlog and Future Work
+# TODO.md — V2 Backlog and Future Work
 
-## Immediate Next Session
-- [ ] Build Data Quality Monitor page (/data-quality)
-- [ ] Build Risk Adjustment / Coding Intensity page (/risk-adjustment)
-- [ ] Build Sample Fairness page (/sample-fairness)
-- [ ] Add global navigation bar (all 8 pages linked)
-- [ ] Polish: fix CI bar label clipping on Extrapolation Simulator
-- [ ] Polish: Estimation Error sub-label direction on Extrapolation Simulator
-- [ ] Vercel deployment setup
+## V2 Phase — Product Polish (Next Session Focus)
 
-## V1 Dashboard Remaining Work
-- [ ] Data Quality Monitor page — DQ issue counts, staging validation, field-level issues
-- [ ] Risk Adjustment page — HCC weights, coding intensity, risk score distribution
-- [ ] Sample Fairness page — audit sample equity, demographic breakdown
-- [ ] Global nav bar — links to all pages, active state, breadcrumbs
-- [ ] Vercel deployment — env vars, service account key handling
+### Product Feel & UX
+- [ ] Loading skeletons on all pages instead of spinner
+- [ ] Error boundary components with helpful messages
+- [ ] Empty state illustrations for filtered results
+- [ ] Smooth page transitions
+- [ ] Mobile responsiveness pass on all pages
+- [ ] Tooltip improvements — richer context on hover
+- [ ] Keyboard navigation support
 
-## Cross-Page Drill-Through (deferred polish)
-- [ ] Provider Benchmarking → Claims Explorer (filter by provider_id)
-- [ ] Anomaly Detection → Claims Explorer (filter by provider + suspicious flag)
-- [ ] Extrapolation Simulator → Claims Explorer (filter by sample type claims)
-- Add "Investigate Claims →" button on provider detail panels
+### Storytelling & Narrative
+- [ ] Add "About this analysis" context banners to each page
+- [ ] Executive Overview — add a narrative summary section at top explaining what the dashboard shows
+- [ ] Extrapolation Simulator — improve interpretation text for each strategy with more specific language
+- [ ] Anomaly Detection — add "What to do next" action guidance below detection curve
+- [ ] Claims Explorer — add "Investigation Guide" sidebar explaining audit workflow
+- [ ] Each page should have a consistent "Key Takeaways" section
 
-## Known Dashboard Issues to Fix
-- Extrapolation Simulator CI bar lower/upper labels slightly cut off at bottom
-- Estimation Error KPI sub-label always says "Overestimate" — should reflect direction
-- Executive Overview: peer group payment differentiation weak ($3.9K–$4.0K range) — note in UI
-- Anomaly score null blind spot for sparse providers — add coverage count to anomaly tiers
+### Dashboard UX Refinements
+- [ ] Cross-page drill-through navigation
+  - Provider Benchmarking → Claims Explorer (filter by provider_id)
+  - Anomaly Detection → Claims Explorer (filter by suspicious providers)
+  - "Investigate Claims →" button on provider detail panels
+- [ ] Claims Explorer: add date range filter
+- [ ] Claims Explorer: add export to CSV button
+- [ ] Provider Benchmarking: add "Compare providers" side-by-side view
+- [ ] Extrapolation Simulator: fix CI bar label clipping at bottom
+- [ ] Extrapolation Simulator: fix Estimation Error direction sub-label
+- [ ] Executive Overview: add trend arrows on KPI cards (vs prior period)
+- [ ] Anomaly Detection: show provider coverage count alongside anomaly tiers
 
-## Known Findings to Note in Dashboard
-- Telehealth rate 30–44% is high — note as prototype artifact, directional trend correct
-- Peer group payment baselines converge — emphasize denial rate and anomaly score differences
-- Random sampling 10.1% error at 2% sample size — expected, document in simulator
+### Business Interpretation Polish
+- [ ] Add $ impact callouts — "This would recover $X in overpayments"
+- [ ] Add audit priority queue — ranked list of recommended next actions
+- [ ] Add benchmark context — "This rate is Xth percentile nationally"
+- [ ] Sample Fairness: improve disparity ratio explanation
+- [ ] Risk Adjustment: add upcoding alert threshold indicators
 
-## V2 Backlog
+### Demo & LinkedIn Presentation
+- [ ] Record 3-minute walkthrough video
+- [ ] Write LinkedIn post with key results and architecture summary
+- [ ] Create architecture diagram (GCP → BigQuery → Next.js → Vercel)
+- [ ] Add README.md with project overview, tech stack, and live demo link
+- [ ] Add screenshot gallery to GitHub repo
+- [ ] Create executive one-pager PDF summarizing findings
+
+### Technical Polish
+- [ ] Add loading skeletons using Tailwind animate-pulse
+- [ ] Implement React Suspense boundaries properly
+- [ ] Add error retry logic on BigQuery API failures
+- [ ] Optimize BigQuery queries — add LIMIT guards on large tables
+- [ ] Add query caching layer (React Query or SWR)
+- [ ] Fix: Dual Eligible Rate KPI on Sample Fairness page
+- [ ] Fix: Denial rate chart colors on Sample Fairness page
+- [ ] Fix: Risk Score & Chronic Burden chart legend order
+
+## V2 Analytics Backlog
 - [ ] K-Means clustering for providers (notebook 06)
 - [ ] ML claim overpayment prediction (notebook 07)
 - [ ] ML model validation (notebook 08)
@@ -41,20 +65,19 @@
 - [ ] Dashboard: Clustering page
 - [ ] Dashboard: ML Model Results page
 - [ ] rendering_provider_id on CCLF5
-- [ ] inject_bias_outliers_duplicates.py post-processing script
 - [ ] audit_sample generation script
 - [ ] Low-volume provider detection track
 
 ## V3 Backlog
 - [ ] Model explainability (SHAP)
 - [ ] Downloadable audit reports
-- [ ] User-controlled simulator
+- [ ] User authentication (Clerk or NextAuth)
 - [ ] Advanced Vercel deployment polish
-- [ ] Demo video
+- [ ] Custom domain
 
 ## Technical Debt
 - pandas-gbq FutureWarning — install pandas-gbq>=0.26.1
 - BigQuery Storage module not installed — install google-cloud-bigquery-storage
 - Notebook 03 Cell 4 prototype scale note outdated — update to positive validation note
-- Peer group payment differentiation weak — consider separating facility types from physician groups
-- dashboard/.env.local uses relative path for service account key — verify works on Vercel
+- Peer group payment differentiation weak — consider separating facility types
+- tsconfig.json strict mode disabled — re-enable after fixing recharts formatter types properly
