@@ -434,7 +434,7 @@ export default function AnomalyDetectionPage() {
                   label={{ value: "% Anomalies Found", angle: -90, position: "insideLeft", fill: "#64748b", fontSize: 10 }}
                 />
                 <Tooltip
-                  formatter={(v: number) => `${v.toFixed(1)}%`}
+                  formatter={(v) => [typeof v === "number" ? `${v.toFixed(1)}%` : v, ""]}
                   contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 11 }}
                   labelFormatter={(v) => `${v}% reviewed`}
                 />
