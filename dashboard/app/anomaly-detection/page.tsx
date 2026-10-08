@@ -62,14 +62,14 @@ const RISK_COLORS: Record<string, string> = {
 
 const TIER_BG: Record<string, string> = {
   "High Risk": "bg-red-900/50 text-red-300 border-red-700",
-  "Medium Risk": "bg-orange-900/50 text-orange-300 border-orange-700",
-  "Low Risk": "bg-yellow-900/50 text-yellow-300 border-yellow-700",
-  "Minimal Risk": "bg-green-900/50 text-green-300 border-green-700",
+  "Elevated Risk": "bg-orange-900/50 text-orange-300 border-orange-700",
+  "Moderate Risk": "bg-yellow-900/50 text-yellow-300 border-yellow-700",
+  "Normal": "bg-green-900/50 text-green-300 border-green-700",
 };
 
 const TIER_COLORS: Record<string, string> = {
-  "High Risk": "#ef4444", "Medium Risk": "#f97316",
-  "Low Risk": "#eab308", "Minimal Risk": "#22c55e",
+  "High Risk": "#ef4444", "Elevated Risk": "#f97316",
+  "Moderate Risk": "#eab308", "Normal": "#22c55e",
 };
 
 const FLAG_LABELS: Record<string, string> = {
@@ -101,6 +101,7 @@ const FLAG_AUDIT_CONTEXT: Record<string, string> = {
   flag_suspicious_patterns: "Multiple concurrent billing anomalies detected — combination of signals suggests systematic rather than isolated billing irregularities.",
   flag_extreme_payment_outlier: "Individual claim payments at extreme deviation from peer norms — highest-priority signal for single-claim investigation.",
 };
+
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -218,7 +219,7 @@ export default function AnomalyDetectionPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  const tiers = ["All", "High Risk", "Medium Risk", "Low Risk", "Minimal Risk"];
+  const tiers = ["All", "High Risk", "Elevated Risk", "Moderate Risk", "Normal"];
 
   const filtered = useMemo(() =>
     providers.filter((p) => tierFilter === "All" || p.anomaly_risk_tier === tierFilter),
@@ -245,6 +246,7 @@ export default function AnomalyDetectionPage() {
   const elevatedRisk = providers.filter((p) => ["Suspicious", "Outlier"].includes(p.provider_risk_profile));
   const highPriority = providers.filter((p) => p.anomaly_risk_tier === "High Risk");
   const totalElevatedOP = elevatedRisk.reduce((s, p) => s + (p.total_overpayment_amt ?? 0), 0);
+  const elevatedCaught = elevatedRisk.filter((p) => (p.composite_anomaly_score ?? 0) >= 10).length;
 
   if (loading) {
     return (
@@ -283,7 +285,7 @@ export default function AnomalyDetectionPage() {
         {[
           { label: "Total Active Providers", value: providers.length.toLocaleString(), accent: "#3b82f6", sub: "In audit review universe" },
           { label: "Elevated Risk Providers", value: elevatedRisk.length.toLocaleString(), accent: "#ef4444", sub: `${fmtPct(elevatedRisk.length / providers.length)} of active providers · ${fmt$(totalElevatedOP)} identified OP` },
-          { label: "High Priority Tier", value: highPriority.length.toLocaleString(), accent: "#f97316", sub: "≥2 concurrent audit signals triggered" },
+          { label: "High Priority Tier", value: highPriority.length.toLocaleString(), accent: "#f97316", sub: "Composite score > 3.0 or Outlier profile" },
           { label: "Audit Efficiency @ 20% Review", value: at20 ? `${(at20.score_guided / at20.random).toFixed(1)}x` : "—", accent: "#a855f7", sub: at20 ? `${at20.score_guided.toFixed(0)}% of elevated-risk providers found` : "" },
         ].map((k) => (
           <div key={k.label} className="relative overflow-hidden rounded-xl border border-slate-700/60 bg-slate-900/80 p-4">
@@ -351,7 +353,7 @@ export default function AnomalyDetectionPage() {
                 <ReferenceLine x={20} stroke="#64748b" strokeDasharray="4 4" />
                 <Line dataKey="score_guided" name="Score-Guided Review" stroke="#3b82f6" strokeWidth={2} dot={false} />
                 <Line dataKey="random" name="Random Selection" stroke="#64748b" strokeWidth={1.5} strokeDasharray="5 5" dot={false} />
-                <Legend wrapperStyle={{ fontSize: 11, color: "#94a3b8" }} />
+                <Legend verticalAlign="top" wrapperStyle={{ fontSize: 11, color: "#94a3b8" }} />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -363,7 +365,7 @@ export default function AnomalyDetectionPage() {
               Score buckets by provider risk profile · elevated-risk providers concentrate at high scores
             </p>
             <div className="mb-4 rounded-lg bg-slate-800/40 px-3 py-2 text-[10px] leading-relaxed text-slate-400">
-              Normal-risk providers are heavily concentrated at scores 0–2, reflecting limited deviation from peer group expectations. Suspicious and Outlier providers are exclusively found at scores above 10, confirming that the composite scoring approach effectively separates elevated-risk providers from the baseline population.
+              Normal-risk providers are heavily concentrated at scores 0–2, reflecting limited deviation from peer group expectations. {elevatedCaught} of {elevatedRisk.length} Suspicious and Outlier providers score above 10, driven mainly by suspicious billing patterns. The remaining {elevatedRisk.length - elevatedCaught} score within the normal range, showing that the composite score detects billing-pattern anomalies strongly but needs additional features, such as payment trends over time, to catch subtler deviation.
             </div>
             <ResponsiveContainer width="100%" height={200}>
               <BarChart data={scoreDist} margin={{ top: 4, right: 8, bottom: 4, left: 8 }}>
@@ -387,7 +389,7 @@ export default function AnomalyDetectionPage() {
               Elevated-risk providers cluster in the upper-right — high scores combined with elevated denial rates
             </p>
             <div className="mb-4 rounded-lg bg-slate-800/40 px-3 py-2 text-[10px] leading-relaxed text-slate-400">
-              The vertical dashed line marks the active review threshold. Providers to the right of this line are prioritized for post-payment review. The strong separation between elevated-risk and normal providers demonstrates that the composite score effectively captures multi-dimensional billing deviations. Click a point to open the audit review panel.
+              The vertical dashed line marks the active review threshold. Providers to the right of this line are prioritized for post-payment review. Providers with suspicious billing patterns separate clearly, scoring above 12 with elevated denial rates. The remaining elevated-risk providers sit inside the normal cluster, the same detection gap shown in the efficiency curve. Click a point to open the audit review panel.
             </div>
             <ResponsiveContainer width="100%" height={240}>
               <ScatterChart margin={{ top: 4, right: 8, bottom: 20, left: 8 }}>
@@ -427,7 +429,7 @@ export default function AnomalyDetectionPage() {
               How often each independent audit signal fires across all providers
             </p>
             <div className="mb-4 rounded-lg bg-slate-800/40 px-3 py-2 text-[10px] leading-relaxed text-slate-400">
-              Each signal is assessed independently. Providers triggering multiple signals simultaneously represent the highest review priority — the composite score reflects signal co-occurrence, not just individual signal strength. Suspicious Billing Patterns and Extreme Payment Outlier signals are the strongest individual predictors of elevated overpayment exposure.
+              Each signal is assessed separately. Providers triggering multiple signals at once represent the highest review priority. Extreme Payment Outlier fires most often because it triggers on any single extreme claim line, so higher-volume providers trip it more. Elevated OP Rate, Excessive Claim Volume, and High Adjustment Rate do not fire at current thresholds, which would need calibration against confirmed audit outcomes.
             </div>
             <ResponsiveContainer width="100%" height={200}>
               <BarChart data={flagFreq} layout="vertical" margin={{ top: 4, right: 40, bottom: 4, left: 8 }}>
